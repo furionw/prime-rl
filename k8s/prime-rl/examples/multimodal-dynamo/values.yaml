@@ -73,6 +73,10 @@ inference:
       value: eth0
     - name: GLOO_SOCKET_IFNAME
       value: eth0
+    - name: NIXL_PLUGIN_DIR
+      value: ${RUN_ROOT}/runtime/lib/python3.12/site-packages/.nixl_cu13.mesonpy.libs/plugins
+    - name: UCX_MODULE_DIR
+      value: ${RUN_ROOT}/runtime/lib/python3.12/site-packages/nixl_cu13.libs/ucx
     - name: PRIME_LOG_LEVEL
       value: debug
 
