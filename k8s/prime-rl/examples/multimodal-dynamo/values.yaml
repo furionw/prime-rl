@@ -77,6 +77,8 @@ inference:
       value: "1"
     - name: NCCL_NET
       value: Socket
+    - name: NCCL_MNNVL_ENABLE
+      value: "0"
     - name: NCCL_DEBUG
       value: INFO
     - name: NCCL_DEBUG_SUBSYS
@@ -126,6 +128,8 @@ trainer:
       value: "1"
     - name: NCCL_NET
       value: Socket
+    - name: NCCL_MNNVL_ENABLE
+      value: "0"
     - name: NCCL_DEBUG
       value: INFO
     - name: NCCL_DEBUG_SUBSYS
