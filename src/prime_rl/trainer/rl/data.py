@@ -2,6 +2,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TypedDict
 
+import numpy as np
 import torch
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
@@ -37,6 +38,11 @@ class TensorMicroBatch(TypedDict):
 
     # MoE router replay
     routed_experts: Int[Tensor, "batch seq layers topk"] | None
+
+    # Kept-set sampling-mask replay: kept token ids per position, -1-padded to
+    # the micro batch's max kept-set size. A row of all -1 (count 0) means no
+    # mask — the trainer uses full-vocab logprobs there.
+    kept_tokens: Int[Tensor, "batch seq kept"] | None
 
     # Generic multimodal kwargs — flat dict matching the model's forward
     # signature (e.g. ``{"pixel_values": ..., "image_grid_thw": ...}`` for
@@ -130,6 +136,7 @@ class FakeDataLoader:
             "loss_mask": loss_mask.unsqueeze(0),
             "lora_num_tokens": lora_num_tokens,
             "routed_experts": None,
+            "kept_tokens": None,
             "mm_kwargs": None,
             "mm_token_type_ids": None,
             "rl_weights": None,
@@ -162,6 +169,7 @@ class FakeDataLoader:
             "loss_mask": torch.ones(self.seq_len, dtype=torch.bool).unsqueeze(0),
             "lora_num_tokens": lora_num_tokens,
             "routed_experts": None,
+            "kept_tokens": None,
             "mm_kwargs": None,
             "mm_token_type_ids": None,
             "rl_weights": None,
@@ -243,6 +251,17 @@ class DataLoader:
                 .to(torch.int32)
                 .unsqueeze(0)
             )
+        kept_tokens = None
+        packed_kept_tokens = micro_batch.kept_tokens
+        if packed_kept_tokens is not None:
+            counts = np.frombuffer(packed_kept_tokens.counts, dtype=np.int32)
+            ids = np.frombuffer(packed_kept_tokens.ids, dtype=np.int32)
+            # Pad the ragged kept sets to [seq, max_kept] with -1; boolean
+            # assignment fills row-major, matching the flat concat order.
+            max_kept = max(int(counts.max()), 1) if counts.size else 1
+            padded = np.full((len(counts), max_kept), -1, dtype=np.int32)
+            padded[np.arange(max_kept)[None, :] < counts[:, None]] = ids
+            kept_tokens = torch.from_numpy(padded).unsqueeze(0)
         return TensorMicroBatch(
             input_ids=torch.tensor(micro_batch.input_ids, dtype=torch.long).unsqueeze(0),
             position_ids=torch.tensor(micro_batch.position_ids, dtype=torch.long).unsqueeze(0),
@@ -261,6 +280,7 @@ class DataLoader:
             if micro_batch.mm_token_type_ids is not None
             else None,
             routed_experts=routed_experts,
+            kept_tokens=kept_tokens,
             rl_weights=torch.tensor(micro_batch.rl_weights, dtype=torch.float).unsqueeze(0)
             if micro_batch.rl_weights is not None
             else None,
