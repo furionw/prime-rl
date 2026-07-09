@@ -70,10 +70,11 @@ spec:
               fi
               export VIRTUAL_ENV="${OVERLAY}"
               export PATH="${OVERLAY}/bin:${PATH}"
-              python -m pip install --upgrade pip "uv>=0.11.1" pytest pytest-benchmark
+              python -m pip install --upgrade pip "uv>=0.11.1" pytest
 
               cd "${PRIME_SRC}"
               uv sync --active --frozen
+              python -m pip install pytest-benchmark
               uv pip install --python "${OVERLAY}/bin/python" \
                 -e deps/verifiers/environments/color_codeword_v1
               python -m pip install --no-deps -e "${PRIME_SRC}"
