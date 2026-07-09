@@ -44,13 +44,28 @@ NODE_NAME="${NODE_NAME:-$(select_node 2)}"
 TRAINER_NODE_NAME="${TRAINER_NODE_NAME:-$(select_node 3 "${NODE_NAME}")}"
 BUILD_JOB="prime-mm-build-${RUN_SLUG}"
 BUILD_JOB="${BUILD_JOB//[^a-z0-9-]/-}"
+PREWARM_POD="prime-mm-prewarm-${RUN_SLUG}"
+PREWARM_POD="${PREWARM_POD//[^a-z0-9-]/-}"
 
-export NAMESPACE RUN_ID RUN_ROOT DYNAMO_REF PRIME_REPO PRIME_REF IMAGE_DIGEST BASE_IMAGE NODE_NAME TRAINER_NODE_NAME BUILD_JOB
+export NAMESPACE RUN_ID RUN_ROOT DYNAMO_REF PRIME_REPO PRIME_REF IMAGE_DIGEST BASE_IMAGE NODE_NAME TRAINER_NODE_NAME BUILD_JOB PREWARM_POD
 
 apply_template() {
   local template="$1"
-  local vars='$NAMESPACE $RUN_ID $RUN_ROOT $DYNAMO_REF $PRIME_REPO $PRIME_REF $IMAGE_DIGEST $BASE_IMAGE $NODE_NAME $TRAINER_NODE_NAME $BUILD_JOB $RENDER_POD $STAGE $RELEASE_NAME $DOWNLOAD_POD $MODEL_NAME'
+  local vars='$NAMESPACE $RUN_ID $RUN_ROOT $DYNAMO_REF $PRIME_REPO $PRIME_REF $IMAGE_DIGEST $BASE_IMAGE $NODE_NAME $TRAINER_NODE_NAME $BUILD_JOB $PREWARM_POD $RENDER_POD $STAGE $RELEASE_NAME $DOWNLOAD_POD $MODEL_NAME'
   envsubst "${vars}" < "${template}" | "${K_ALL[@]}" apply -f -
+}
+
+start_image_prewarm() {
+  "${K[@]}" delete pod "${PREWARM_POD}" --ignore-not-found --wait=true
+  apply_template "${HERE}/prewarm-pod.yaml"
+}
+
+finish_image_prewarm() {
+  if ! "${K[@]}" wait --for=jsonpath='{.status.phase}'=Succeeded "pod/${PREWARM_POD}" --timeout=600s; then
+    "${K[@]}" describe pod "${PREWARM_POD}" >&2 || true
+    return 1
+  fi
+  "${K[@]}" delete pod "${PREWARM_POD}" --wait=false >/dev/null
 }
 
 preflight() {
@@ -169,9 +184,32 @@ deploy_stage() {
     --namespace "${NAMESPACE}" \
     -f "${out}/values.yaml"
 
-  "${K[@]}" wait --for=condition=Ready "pod/${release}-inference-0" --timeout=1800s
-  "${K[@]}" wait --for=condition=Ready "pod/${release}-trainer-0" --timeout=1800s
-  "${K[@]}" wait --for=condition=Ready "pod/${release}-orchestrator-0" --timeout=300s
+  wait_for_pod_ready "${release}" inference 1800
+  wait_for_pod_ready "${release}" trainer 1800
+  wait_for_pod_ready "${release}" orchestrator 300
+}
+
+wait_for_pod_ready() {
+  local release="$1"
+  local role="$2"
+  local timeout="$3"
+  local deadline=$(( $(date +%s) + timeout ))
+  while (( $(date +%s) < deadline )); do
+    for process_role in inference trainer orchestrator; do
+      local logs
+      logs="$("${K[@]}" logs "${release}-${process_role}-0" --tail=40 2>/dev/null || true)"
+      if grep -Eq "RL_${process_role^^}_EXIT=[1-9]" <<<"${logs}"; then
+        printf '%s\n' "${logs}" >&2
+        return 1
+      fi
+    done
+    if [[ "$("${K[@]}" get pod "${release}-${role}-0" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)" == True ]]; then
+      return 0
+    fi
+    sleep 10
+  done
+  "${K[@]}" describe pod "${release}-${role}-0" >&2 || true
+  return 1
 }
 
 wait_stage() {
@@ -230,9 +268,9 @@ run_stage() {
   local stage="$1"
   download_model "${stage}"
   render_stage "${stage}"
-  deploy_stage "${stage}"
-  if ! wait_stage "${stage}"; then
+  if ! deploy_stage "${stage}" || ! wait_stage "${stage}"; then
     collect_stage "${stage}"
+    clean_stage "${stage}"
     return 1
   fi
   collect_stage "${stage}"
@@ -241,7 +279,9 @@ run_stage() {
 
 all() {
   preflight
+  start_image_prewarm
   build_overlay
+  finish_image_prewarm
   run_stage smoke
   run_stage learn
   "${K[@]}" delete job "${BUILD_JOB}" --ignore-not-found --wait=false
@@ -250,8 +290,8 @@ all() {
 case "${1:-all}" in
   preflight) preflight ;;
   build) preflight; build_overlay ;;
-  smoke) preflight; run_stage smoke ;;
-  learn) preflight; run_stage learn ;;
+  smoke) preflight; start_image_prewarm; finish_image_prewarm; run_stage smoke ;;
+  learn) preflight; start_image_prewarm; finish_image_prewarm; run_stage learn ;;
   clean) clean_stage smoke; clean_stage learn ;;
   all) all ;;
   *) echo "usage: $0 {preflight|build|smoke|learn|clean|all}" >&2; exit 2 ;;

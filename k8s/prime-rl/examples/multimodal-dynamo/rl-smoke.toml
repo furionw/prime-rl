@@ -61,6 +61,7 @@ optim_cpu_offload = false
 lr = 3e-6
 
 [inference]
+enable_expert_parallel = false
 
 [inference.backend]
 type = "dynamo"

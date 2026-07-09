@@ -2,7 +2,7 @@
 
 This on-demand integration test builds Dynamo and Prime RL into a shared-PVC
 runtime overlay, runs Prime's native Dynamo backend in a two-GPU inference
-StatefulSet, and runs one trainer on the same four-GPU GB200 node. The native
+StatefulSet, and runs one trainer on a second GB200 node. The native
 backend launches the Dynamo frontend plus one prefill and one decode process.
 
 The default sequence uses:
@@ -14,6 +14,11 @@ The default sequence uses:
   checkpoints, and run artifacts.
 - The digest-pinned ARM64 toolchain image configured in `run.sh`.
 
+Before deployment, the driver starts pulling the base image onto the trainer
+node while the runtime overlay builds on the inference node. Each stage also
+runs an explicit Hugging Face download pod; already-cached model snapshots make
+that step a fast offline cache check.
+
 Run the complete sequence from this directory:
 
 ```bash
@@ -21,8 +26,10 @@ Run the complete sequence from this directory:
 ```
 
 Set `RUN_ID`, `NODE_NAME`, `TRAINER_NODE_NAME`, `DYNAMO_REF`, `PRIME_REPO`, or
-`PRIME_REF` to resume or override a specific run. Individual phases are available as `preflight`,
-`build`, `smoke`, `learn`, and `clean`.
+`PRIME_REF` to resume or override a specific run. Reusing `RUN_ID` also reuses
+the validated runtime overlay when its image and source commit manifest still
+match. Individual phases are available as `preflight`, `build`, `smoke`,
+`learn`, and `clean`.
 
 Local logs and rendered manifests are written under
 `~/workspace/dynamo-tmp/logs/07-09/multimodal-rl-k8s/<run-id>/`. The driver

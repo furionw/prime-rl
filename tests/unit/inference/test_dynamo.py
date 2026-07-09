@@ -1,4 +1,5 @@
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,8 @@ from prime_rl.inference.dynamo import (
     build_worker_process,
     write_role_engine_configs,
 )
+
+RECIPE = Path(__file__).parents[3] / "k8s" / "prime-rl" / "examples" / "multimodal-dynamo"
 
 
 def disaggregated_config(**overrides) -> InferenceConfig:
@@ -30,6 +33,18 @@ def disaggregated_config(**overrides) -> InferenceConfig:
     }
     data.update(overrides)
     return InferenceConfig.model_validate(data)
+
+
+@pytest.mark.parametrize("stage", ["smoke", "learn"])
+def test_dense_multimodal_recipe_disables_expert_parallel(stage: str):
+    config = tomllib.loads((RECIPE / f"rl-{stage}.toml").read_text())
+    assert config["inference"]["enable_expert_parallel"] is False
+
+
+def test_multimodal_recipe_overrides_nested_orchestrator_client():
+    values = (RECIPE / "values.yaml").read_text()
+    assert '--model.client.base-url "$INFERENCE_URL"' in values
+    assert '--client.base-url "$INFERENCE_URL"' not in values
 
 
 def test_role_engine_configs_share_nixl_and_only_prefill_publishes_events(tmp_path: Path):

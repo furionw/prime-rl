@@ -65,6 +65,38 @@ spec:
               git config --global url."https://github.com/".insteadOf git@github.com:
               git -C "${PRIME_SRC}" submodule update --init --recursive --depth=1
 
+              if [[ -x "${OVERLAY}/bin/python" && -f "${MARKER}" ]] &&
+                python - "${MARKER}" <<'PY'
+              import json
+              import os
+              import subprocess
+              import sys
+              from pathlib import Path
+
+              marker = json.loads(Path(sys.argv[1]).read_text())
+              root = Path(os.environ["RUN_ROOT"])
+              expected = {
+                  "base_image": os.environ.get("BASE_IMAGE", ""),
+                  "dynamo_sha": subprocess.check_output(
+                      ["git", "-C", str(root / "src/dynamo"), "rev-parse", "HEAD"],
+                      text=True,
+                  ).strip(),
+                  "prime_sha": subprocess.check_output(
+                      ["git", "-C", str(root / "src/prime-rl"), "rev-parse", "HEAD"],
+                      text=True,
+                  ).strip(),
+                  "runtime": str(root / "runtime"),
+              }
+              raise SystemExit(0 if marker == expected else 1)
+              PY
+              then
+                export VIRTUAL_ENV="${OVERLAY}"
+                export PATH="${OVERLAY}/bin:${PATH}"
+                python -c "import dynamo.llm, prime_rl, vllm; print('runtime cache hit')"
+                cat "${MARKER}"
+                exit 0
+              fi
+
               if [[ ! -x "${OVERLAY}/bin/python" ]]; then
                 python3 -m venv --system-site-packages "${OVERLAY}"
               fi
