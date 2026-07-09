@@ -62,6 +62,9 @@ inference:
     requests:
       memory: "256Gi"
       cpu: "24"
+  sharedMemory:
+    enabled: true
+    sizeLimit: 4Gi
   nodeSelector:
     kubernetes.io/hostname: ${NODE_NAME}
   env:
@@ -113,6 +116,9 @@ trainer:
     requests:
       memory: "256Gi"
       cpu: "24"
+  sharedMemory:
+    enabled: true
+    sizeLimit: 4Gi
   nodeSelector:
     kubernetes.io/hostname: ${TRAINER_NODE_NAME}
   env:

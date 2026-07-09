@@ -147,3 +147,21 @@ def test_chart_reuses_storage_and_pins_workload_image_by_digest():
     assert f'image: "nvcr.io/example/prime@{IMAGE_DIGEST}"' in rendered
     assert "name: ngc-pull-secret" in rendered
     assert "kubernetes.io/hostname: gb200-node" in rendered
+
+
+def test_native_chart_can_mount_memory_backed_shared_memory():
+    rendered = helm_template(
+        "--set",
+        "inference.sharedMemory.enabled=true",
+        "--set",
+        "inference.sharedMemory.sizeLimit=4Gi",
+        "--set",
+        "trainer.sharedMemory.enabled=true",
+        "--set",
+        "trainer.sharedMemory.sizeLimit=2Gi",
+    )
+
+    assert rendered.count("mountPath: /dev/shm") == 2
+    assert rendered.count("medium: Memory") == 2
+    assert "sizeLimit: 4Gi" in rendered
+    assert "sizeLimit: 2Gi" in rendered
