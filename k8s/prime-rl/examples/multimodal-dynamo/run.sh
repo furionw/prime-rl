@@ -132,7 +132,9 @@ render_stage() {
 
   local deadline=$(( $(date +%s) + 600 ))
   while (( $(date +%s) < deadline )); do
-    if "${K[@]}" logs "${RENDER_POD}" --tail=50 2>/dev/null | grep -Fq RENDER_COMPLETE; then
+    local render_logs
+    render_logs="$("${K[@]}" logs "${RENDER_POD}" --tail=50 2>/dev/null || true)"
+    if grep -Fq RENDER_COMPLETE <<<"${render_logs}"; then
       break
     fi
     local phase
