@@ -221,6 +221,7 @@ class StaticInferencePool(_StaticClientPool):
             self._frontend_admin_clients,
             model_name,
             skip_model_check=self._skip_model_check,
+            timeout=ready_timeout,
         )
 
     async def update_weights(self, weight_dir: Path | None, lora_name: str | None = None, step: int = 0) -> None:
@@ -282,6 +283,7 @@ class DynamoInferencePool(_StaticClientPool):
             self._frontend_admin_clients,
             model_name,
             skip_model_check=self._skip_model_check,
+            timeout=ready_timeout,
         )
         worker_urls = await discover_worker_urls(self._discovery_clients, ready_timeout, model_name=model_name)
         self._worker_urls = tuple(worker_urls)
@@ -422,18 +424,34 @@ def setup_admin_clients(client_config: ClientConfig, urls: list[str] | None = No
 
 
 async def maybe_check_has_model(
-    admin_clients: list[AsyncClient], model_name: str, skip_model_check: bool = False
+    admin_clients: list[AsyncClient],
+    model_name: str,
+    skip_model_check: bool = False,
+    timeout: int = 1800,
+    interval: float = 1,
 ) -> None:
     if skip_model_check:
         return
     logger = get_logger()
     logger.debug(f"Checking if model {model_name} is in the inference pool")
-    results = await asyncio.gather(*[admin_client.get("/v1/models") for admin_client in admin_clients])
-    for admin_client, result in zip(admin_clients, results):
-        models = result.json()["data"]
-        if not any(model["id"] == model_name for model in models):
-            raise ValueError(f"Model {model_name} was not found in the inference pool on {admin_client.base_url}")
-    logger.debug(f"Model {model_name} was found in the inference pool")
+    deadline = asyncio.get_running_loop().time() + timeout
+    last_error: Exception | None = None
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            results = await asyncio.gather(*[admin_client.get("/v1/models") for admin_client in admin_clients])
+            for admin_client, result in zip(admin_clients, results):
+                result.raise_for_status()
+                models = result.json()["data"]
+                if not any(model["id"] == model_name for model in models):
+                    raise ValueError(
+                        f"Model {model_name} was not found in the inference pool on {admin_client.base_url}"
+                    )
+            logger.debug(f"Model {model_name} was found in the inference pool")
+            return
+        except Exception as exc:
+            last_error = exc
+            await asyncio.sleep(interval)
+    raise TimeoutError(f"Model {model_name} was not ready after {timeout} seconds: {last_error}")
 
 
 async def check_health(

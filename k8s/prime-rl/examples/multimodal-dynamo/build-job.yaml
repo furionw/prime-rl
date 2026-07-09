@@ -129,7 +129,11 @@ spec:
               python -m pytest -q components/src/dynamo/vllm/tests/test_vllm_engine_generate.py
 
               cd "${PRIME_SRC}"
-              python -m pytest -q tests/unit/inference/test_dynamo.py tests/unit/inference/test_dgd.py tests/unit/inference/test_helm_dgd.py
+              python -m pytest -q \
+                tests/unit/inference/test_dynamo.py \
+                tests/unit/inference/test_dgd.py \
+                tests/unit/inference/test_helm_dgd.py \
+                tests/unit/utils/test_client.py
 
               python - <<'PY'
               import json

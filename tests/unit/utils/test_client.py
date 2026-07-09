@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
+import pytest
 from verifiers.v1.clients.config import EvalClientConfig
 
 from prime_rl.configs.shared import ClientConfig
@@ -11,9 +12,29 @@ from prime_rl.utils.client import (
     StaticInferencePool,
     _is_retryable_lora_error,
     load_lora_adapter,
+    maybe_check_has_model,
     setup_clients,
     setup_inference_pool,
 )
+
+
+@pytest.mark.asyncio
+async def test_model_check_waits_for_frontend_registration():
+    request_count = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        models = [] if request_count == 1 else [{"id": "test-model"}]
+        return httpx.Response(200, json={"data": models})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://frontend:8000")
+    try:
+        await maybe_check_has_model([client], "test-model", timeout=1, interval=0)
+    finally:
+        await client.aclose()
+
+    assert request_count == 2
 
 
 def test_is_retryable_lora_error_returns_true_for_404():
