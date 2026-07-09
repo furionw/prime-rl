@@ -197,8 +197,10 @@ wait_for_pod_ready() {
   while (( $(date +%s) < deadline )); do
     for process_role in inference trainer orchestrator; do
       local logs
+      local process_role_upper
       logs="$("${K[@]}" logs "${release}-${process_role}-0" --tail=40 2>/dev/null || true)"
-      if grep -Eq "RL_${process_role^^}_EXIT=[1-9]" <<<"${logs}"; then
+      process_role_upper="$(printf '%s' "${process_role}" | tr '[:lower:]' '[:upper:]')"
+      if grep -Eq "RL_${process_role_upper}_EXIT=[1-9]" <<<"${logs}"; then
         printf '%s\n' "${logs}" >&2
         return 1
       fi
