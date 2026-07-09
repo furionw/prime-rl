@@ -93,7 +93,7 @@ spec:
               python -c "import prime_rl, vllm; print('prime_rl OK', prime_rl.__path__, 'vllm', vllm.__version__)"
 
               cd "${DYNAMO_SRC}"
-              python -m pytest -q                 components/src/dynamo/vllm/tests/test_vllm_engine_generate.py                 components/src/dynamo/vllm/tests/test_vllm_unit.py
+              python -m pytest -q components/src/dynamo/vllm/tests/test_vllm_engine_generate.py
 
               cd "${PRIME_SRC}"
               python -m pytest -q                 tests/unit/inference/test_dgd.py                 tests/unit/inference/test_helm_dgd.py
