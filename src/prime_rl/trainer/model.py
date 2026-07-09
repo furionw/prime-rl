@@ -48,9 +48,9 @@ from prime_rl.trainer.models.layers.lm_head import inject_prime_lm_head
 from prime_rl.trainer.models.layers.moe import LatentMoE, MoE, TokenChoiceTopKRouter
 from prime_rl.trainer.parallel_dims import ParallelDims
 from prime_rl.trainer.weights import (
+    atomic_save_state_dict,
     load_state_dict,
     load_state_dict_keys,
-    save_state_dict,
 )
 from prime_rl.trainer.world import get_world
 from prime_rl.utils.logger import get_logger
@@ -848,7 +848,7 @@ def load_dcp_from_hf(model: nn.Module, config: ModelConfig, parallel_dims: Paral
                 )
                 snapshot_state_dict = load_state_dict(snapshot_path.parent)
                 model.convert_to_prime(snapshot_state_dict)
-                save_state_dict(snapshot_state_dict, snapshot_path)
+                atomic_save_state_dict(snapshot_state_dict, snapshot_path)
                 del snapshot_state_dict
 
         elif model.is_prime_state_dict(snapshot_keys) and model.is_hf_state_dict(model_keys):
@@ -862,7 +862,7 @@ def load_dcp_from_hf(model: nn.Module, config: ModelConfig, parallel_dims: Paral
                 )
                 snapshot_state_dict = load_state_dict(snapshot_path.parent)
                 model.convert_to_hf(snapshot_state_dict)
-                save_state_dict(snapshot_state_dict, snapshot_path)
+                atomic_save_state_dict(snapshot_state_dict, snapshot_path)
                 del snapshot_state_dict
 
     # All ranks wait for master rank to finish conversion
