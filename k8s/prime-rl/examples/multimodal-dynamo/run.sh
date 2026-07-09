@@ -225,6 +225,16 @@ wait_stage() {
   local deadline=$(( $(date +%s) + timeout ))
 
   while (( $(date +%s) < deadline )); do
+    for process_role in inference trainer; do
+      local process_logs
+      local process_role_upper
+      process_logs="$("${K[@]}" logs "${release}-${process_role}-0" --tail=120 2>&1 || true)"
+      process_role_upper="$(printf '%s' "${process_role}" | tr '[:lower:]' '[:upper:]')"
+      if grep -Eq "RL_${process_role_upper}_EXIT=[1-9]" <<<"${process_logs}"; then
+        printf '%s\n' "${process_logs}" >&2
+        return 1
+      fi
+    done
     local logs
     logs="$("${K[@]}" logs "${release}-orchestrator-0" --tail=120 2>&1 || true)"
     if grep -Fq 'RL_ORCHESTRATOR_EXIT=0' <<<"${logs}"; then

@@ -107,6 +107,18 @@ trainer:
       value: eth0
     - name: GLOO_SOCKET_IFNAME
       value: eth0
+    - name: RANK
+      value: "0"
+    - name: WORLD_SIZE
+      value: "1"
+    - name: LOCAL_RANK
+      value: "0"
+    - name: LOCAL_WORLD_SIZE
+      value: "1"
+    - name: MASTER_ADDR
+      value: 127.0.0.1
+    - name: MASTER_PORT
+      value: "29500"
     - name: PRIME_LOG_LEVEL
       value: debug
 
