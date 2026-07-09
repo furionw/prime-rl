@@ -45,7 +45,8 @@ spec:
               MARKER="${RUN_ROOT}/runtime-manifest.json"
 
               rm -rf "${OVERLAY}" "${RUN_ROOT}/src"
-              mkdir -p "${OVERLAY}" "${RUN_ROOT}/src" "${RUN_ROOT}/logs"
+              export UV_CACHE_DIR="${RUN_ROOT}/uv-cache"
+              mkdir -p "${OVERLAY}" "${RUN_ROOT}/src" "${RUN_ROOT}/logs" "${UV_CACHE_DIR}"
 
               git init "${DYNAMO_SRC}"
               git -C "${DYNAMO_SRC}" remote add origin https://github.com/ai-dynamo/dynamo.git
