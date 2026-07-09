@@ -231,6 +231,9 @@ class RLConfig(BaseConfig):
     slurm: SlurmConfig | None = None
     """SLURM configuration. If None, runs locally."""
 
+    kubernetes: bool = False
+    """Allow an external Kubernetes launcher to split and run a multi-node config."""
+
     dry_run: bool = False
     """Only validate and dump resolved configs, then exit early."""
 
@@ -266,8 +269,10 @@ class RLConfig(BaseConfig):
     @model_validator(mode="after")
     def validate_deployment(self):
         if self.deployment.type == "multi_node":
-            if self.slurm is None:
+            if self.slurm is None and not self.kubernetes:
                 raise ValueError("Must use SLURM for multi-node deployment.")
+            if self.slurm is not None and self.kubernetes:
+                raise ValueError("Configure either SLURM or Kubernetes, not both.")
             num_infer_nodes = self.deployment.infer_nodes_per_replica
             if num_infer_nodes > 0 and not self.inference:
                 raise ValueError("Must configure inference when using multi-node deployment with inference nodes.")

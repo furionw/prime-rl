@@ -1,5 +1,6 @@
 max_steps = 15
 seq_len = 4096
+kubernetes = true
 
 [model]
 name = "Qwen/Qwen3-VL-4B-Instruct"
