@@ -47,6 +47,9 @@ def render_options(tmp_path: Path) -> DynamoGraphRenderOptions:
         shared_pvc="p4-shared-data",
         image_pull_secrets=("nvcrimagepullsecret",),
         hf_token_secret="hf-token-secret",
+        node_selector=(("kubernetes.io/hostname", "gb200-node"),),
+        runtime_class_name=None,
+        runtime_overlay="/data/runtime/run-1",
     )
 
 
@@ -69,6 +72,9 @@ def test_dgd_values_derive_topology_and_role_configs(tmp_path: Path):
     for service in services.values():
         pod_spec = service["extraPodSpec"]
         assert pod_spec["imagePullSecrets"] == [{"name": "nvcrimagepullsecret"}]
+        assert pod_spec["nodeSelector"] == {"kubernetes.io/hostname": "gb200-node"}
+        assert "runtimeClassName" not in pod_spec
+        assert pod_spec["mainContainer"]["command"][0] == "/data/runtime/run-1/bin/python"
         assert any(item["name"] == "HF_TOKEN" for item in pod_spec["mainContainer"]["env"])
         env = {item["name"]: item.get("value") for item in pod_spec["mainContainer"]["env"]}
         assert env["HF_HOME"] == "/model-cache"

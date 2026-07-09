@@ -36,6 +36,9 @@ class DynamoGraphRenderOptions:
     shared_pvc: str | None = None
     image_pull_secrets: tuple[str, ...] = ()
     hf_token_secret: str | None = None
+    node_selector: tuple[tuple[str, str], ...] = ()
+    runtime_class_name: str | None = "nvidia"
+    runtime_overlay: str | None = None
 
     def __post_init__(self) -> None:
         for name, value in (("prime_sha", self.prime_sha), ("dynamo_sha", self.dynamo_sha)):
@@ -45,9 +48,19 @@ class DynamoGraphRenderOptions:
             raise ValueError("image_digest must be a full sha256 digest")
         if not self.image.endswith(f"@{self.image_digest}"):
             raise ValueError("DGD image must be pinned to image_digest")
+        if self.runtime_overlay is not None and not Path(self.runtime_overlay).is_absolute():
+            raise ValueError("runtime_overlay must be an absolute container path")
         image_tag = self.image.rsplit("@", 1)[0]
-        if self.prime_sha[:12] not in image_tag or self.dynamo_sha[:12] not in image_tag:
+        if self.runtime_overlay is None and (
+            self.prime_sha[:12] not in image_tag or self.dynamo_sha[:12] not in image_tag
+        ):
             raise ValueError("DGD image tag must include the Prime and Dynamo commit suffixes")
+
+    @property
+    def python_executable(self) -> str:
+        if self.runtime_overlay is None:
+            return "python3"
+        return str(Path(self.runtime_overlay) / "bin" / "python")
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -93,6 +106,13 @@ def _apply_pod_credentials(
         )
 
 
+def _apply_pod_scheduling(pod_spec: dict[str, Any], options: DynamoGraphRenderOptions) -> None:
+    if options.runtime_class_name:
+        pod_spec["runtimeClassName"] = options.runtime_class_name
+    if options.node_selector:
+        pod_spec["nodeSelector"] = dict(options.node_selector)
+
+
 def _worker_service(
     config: InferenceConfig,
     options: DynamoGraphRenderOptions,
@@ -113,7 +133,7 @@ def _worker_service(
     container = {
         "image": options.image,
         "imagePullPolicy": "IfNotPresent",
-        "command": ["python3", "-m", process.module],
+        "command": [options.python_executable, "-m", process.module],
         "args": list(process.arguments),
         "env": _worker_env(process),
         "volumeMounts": [
@@ -125,7 +145,6 @@ def _worker_service(
         ],
     }
     pod_spec = {
-        "runtimeClassName": "nvidia",
         "tolerations": [{"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"}],
         "volumes": [
             {
@@ -135,6 +154,7 @@ def _worker_service(
         ],
         "mainContainer": container,
     }
+    _apply_pod_scheduling(pod_spec, options)
     _apply_pod_credentials(pod_spec, container, options)
     return {
         "componentType": "worker",
@@ -180,16 +200,19 @@ def build_dgd_values(config: InferenceConfig, options: DynamoGraphRenderOptions)
         "prime-rl.nvidia.com/prime-sha": options.prime_sha,
         "prime-rl.nvidia.com/run-name": options.run_name,
     }
+    if options.runtime_overlay is not None:
+        annotations["prime-rl.nvidia.com/runtime-overlay"] = options.runtime_overlay
     frontend_process = build_frontend_process(config, host="0.0.0.0", port=8000)
     frontend_container = {
         "image": options.image,
         "imagePullPolicy": "IfNotPresent",
-        "command": ["python3", "-m", frontend_process.module],
+        "command": [options.python_executable, "-m", frontend_process.module],
         "args": list(frontend_process.arguments),
         "env": [{"name": name, "value": value} for name, value in sorted(frontend_process.environment().items())],
         "ports": [{"containerPort": 8001, "name": "rl"}],
     }
     frontend_pod_spec = {"mainContainer": frontend_container}
+    _apply_pod_scheduling(frontend_pod_spec, options)
     _apply_pod_credentials(frontend_pod_spec, frontend_container, options)
     frontend = {
         "componentType": "frontend",
@@ -289,7 +312,20 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--shared-pvc")
     parser.add_argument("--image-pull-secret", action="append", default=[])
     parser.add_argument("--hf-token-secret")
+    parser.add_argument("--node-selector", action="append", default=[], metavar="KEY=VALUE")
+    parser.add_argument("--runtime-class-name", default="nvidia")
+    parser.add_argument("--runtime-overlay")
     return parser.parse_args()
+
+
+def _parse_node_selectors(values: list[str]) -> tuple[tuple[str, str], ...]:
+    selectors: list[tuple[str, str]] = []
+    for value in values:
+        key, separator, item = value.partition("=")
+        if not separator or not key or not item:
+            raise ValueError(f"Invalid node selector {value!r}; expected KEY=VALUE")
+        selectors.append((key, item))
+    return tuple(selectors)
 
 
 def main() -> None:
@@ -308,6 +344,9 @@ def main() -> None:
         shared_pvc=args.shared_pvc,
         image_pull_secrets=tuple(args.image_pull_secret),
         hf_token_secret=args.hf_token_secret,
+        node_selector=_parse_node_selectors(args.node_selector),
+        runtime_class_name=args.runtime_class_name or None,
+        runtime_overlay=args.runtime_overlay,
     )
     for path in write_dgd_artifacts(config, options).values():
         print(path)

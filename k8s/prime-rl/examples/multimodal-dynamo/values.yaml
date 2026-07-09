@@ -1,0 +1,86 @@
+namespace: ${NAMESPACE}
+
+image:
+  repository: nvcr.io/nvstaging/ai-dynamo/vllm-runtime
+  digest: ${IMAGE_DIGEST}
+  pullPolicy: IfNotPresent
+  pullSecrets:
+    - name: ngc-pull-secret
+
+storage:
+  enabled: true
+  existingClaim: shared-model-cache
+  mountPath: /data
+
+orchestrator:
+  enabled: true
+  replicas: 1
+  autoStart: true
+  command: >-
+    until curl -fsS http://${RELEASE_NAME}-frontend.${NAMESPACE}.svc.cluster.local:8000/health; do sleep 10; done;
+    set +e;
+    ${RUN_ROOT}/runtime/bin/orchestrator
+    @ ${RUN_ROOT}/render/${STAGE}/configs/orchestrator.toml
+    --output-dir ${RUN_ROOT}/outputs/${STAGE}
+    --client.base-url "$INFERENCE_URL"
+    --weight-broadcast.host ${RELEASE_NAME}-trainer.${NAMESPACE}.svc.cluster.local;
+    rc=$?;
+    echo "RL_ORCHESTRATOR_EXIT=${rc}";
+    sleep infinity
+  resources:
+    requests:
+      memory: "32Gi"
+      cpu: "8"
+  nodeSelector:
+    kubernetes.io/hostname: ${NODE_NAME}
+  env:
+    - name: HF_HOME
+      value: /data
+    - name: HF_HUB_OFFLINE
+      value: "1"
+    - name: PRIME_LOG_LEVEL
+      value: debug
+
+inference:
+  enabled: true
+  mode: dynamoGraph
+  runtimeClassName: ""
+
+trainer:
+  enabled: true
+  replicas: 1
+  autoStart: true
+  command: >-
+    set +e;
+    ${RUN_ROOT}/runtime/bin/trainer
+    @ ${RUN_ROOT}/render/${STAGE}/configs/trainer.toml
+    --output-dir ${RUN_ROOT}/outputs/${STAGE};
+    rc=$?;
+    echo "RL_TRAINER_EXIT=${rc}";
+    sleep infinity
+  runtimeClassName: ""
+  gpu:
+    enabled: true
+    count: 1
+  resources:
+    requests:
+      memory: "256Gi"
+      cpu: "24"
+  nodeSelector:
+    kubernetes.io/hostname: ${NODE_NAME}
+  env:
+    - name: HF_HOME
+      value: /data
+    - name: HF_HUB_OFFLINE
+      value: "1"
+    - name: NCCL_SOCKET_IFNAME
+      value: eth0
+    - name: GLOO_SOCKET_IFNAME
+      value: eth0
+    - name: PRIME_LOG_LEVEL
+      value: debug
+
+config:
+  example: multimodal-dynamo
+  secrets:
+    enabled: false

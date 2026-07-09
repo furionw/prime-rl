@@ -10,10 +10,13 @@ image:
   repository: primeintellect/prime-rl
   pullPolicy: IfNotPresent
   tag: "main"
+  digest: ""
+  pullSecrets: []
 
 # Shared storage configuration
 storage:
   enabled: true
+  existingClaim: ""
   # PVC name will be automatically set to {{ .Release.Name }}-shared-data
   storageClassName: nfs
   accessModes:
@@ -126,6 +129,8 @@ trainer:
     ncclPort: 29501
 
   env: []
+
+  nodeSelector: {}
 
   runtimeClassName: nvidia
 
