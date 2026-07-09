@@ -1,8 +1,9 @@
 # Multimodal Dynamo RL on Kubernetes
 
 This on-demand integration test builds Dynamo and Prime RL into a shared-PVC
-runtime overlay, deploys a one-prefill/one-decode DynamoGraphDeployment, and
-runs one trainer on the same four-GPU GB200 node.
+runtime overlay, runs Prime's native Dynamo backend in a two-GPU inference
+StatefulSet, and runs one trainer on the same four-GPU GB200 node. The native
+backend launches the Dynamo frontend plus one prefill and one decode process.
 
 The default sequence uses:
 
