@@ -79,9 +79,11 @@ spec:
                 -e deps/verifiers/environments/color_codeword_v1
               python -m pip install --no-deps -e "${PRIME_SRC}"
 
-              export CARGO_TARGET_DIR="${RUN_ROOT}/cargo-target"
+              export CARGO_TARGET_DIR="${RUN_ROOT}/cargo-target/python"
               cd "${DYNAMO_SRC}/lib/bindings/python"
               maturin develop --uv
+              python -c "from dynamo._core import AicPerfConfig; print('dynamo._core OK')"
+              export CARGO_TARGET_DIR="${RUN_ROOT}/cargo-target/kvbm"
               cd "${DYNAMO_SRC}/lib/bindings/kvbm"
               maturin develop --uv --features block-manager
               python -m pip install --no-deps -e "${DYNAMO_SRC}"
