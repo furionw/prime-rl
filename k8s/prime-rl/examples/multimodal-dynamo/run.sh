@@ -144,25 +144,12 @@ render_stage() {
     sleep 5
   done
   "${K[@]}" logs "${RENDER_POD}" | tee "${out}/render.log"
-  "${K[@]}" cp "${RENDER_POD}:${RUN_ROOT}/render/${stage}/dgd" "${out}/dgd"
+  rm -rf "${out}/render"
+  "${K[@]}" cp "${RENDER_POD}:${RUN_ROOT}/render/${stage}" "${out}/render"
   envsubst '$NAMESPACE $IMAGE_DIGEST $RUN_ROOT $STAGE $RELEASE_NAME $NODE_NAME' \
     < "${HERE}/values.yaml" > "${out}/values.yaml"
   "${K[@]}" delete pod "${RENDER_POD}" --wait=false >/dev/null
   printf '%s\n' "${RELEASE_NAME}" > "${out}/release-name"
-}
-
-patch_dgd_service_account() {
-  local release="$1"
-  for _ in $(seq 1 60); do
-    if "${K[@]}" get sa "${release}-k8s-service-discovery" >/dev/null 2>&1; then
-      "${K[@]}" patch sa "${release}-k8s-service-discovery" \
-        -p '{"imagePullSecrets":[{"name":"ngc-pull-secret"}]}' >/dev/null
-      return 0
-    fi
-    sleep 2
-  done
-  echo "DGD service account was not created" >&2
-  return 1
 }
 
 deploy_stage() {
@@ -172,18 +159,9 @@ deploy_stage() {
   release="$(<"${out}/release-name")"
   helm upgrade --install "${release}" "${CHART}" \
     --namespace "${NAMESPACE}" \
-    -f "${out}/values.yaml" \
-    -f "${out}/dgd/dynamo-helm-values.json"
-  patch_dgd_service_account "${release}"
+    -f "${out}/values.yaml"
 
-  local worker_selector="nvidia.com/dynamo-graph-deployment-name=${release},nvidia.com/dynamo-component-type=worker"
-  for _ in $(seq 1 60); do
-    if [[ "$("${K[@]}" get pod -l "${worker_selector}" --no-headers 2>/dev/null | wc -l | tr -d ' ')" -ge 2 ]]; then
-      break
-    fi
-    sleep 2
-  done
-  "${K[@]}" wait --for=condition=Ready pod -l "${worker_selector}" --timeout=1800s
+  "${K[@]}" wait --for=condition=Ready "pod/${release}-inference-0" --timeout=1800s
   "${K[@]}" wait --for=condition=Ready "pod/${release}-trainer-0" --timeout=1800s
   "${K[@]}" wait --for=condition=Ready "pod/${release}-orchestrator-0" --timeout=300s
 }
@@ -219,22 +197,11 @@ collect_stage() {
   local out="${LOCAL_LOG_ROOT}/${stage}"
   local release
   release="$(<"${out}/release-name")"
-  "${K[@]}" get dynamographdeployment "${release}" -o yaml > "${out}/dgd-live.yaml"
-  "${K[@]}" get pods \
-    -l "nvidia.com/dynamo-graph-deployment-name=${release}" \
-    -o wide > "${out}/dgd-pods.txt"
-  for pod in $("${K[@]}" get pods -l "nvidia.com/dynamo-graph-deployment-name=${release}" -o name); do
-    local name="${pod#pod/}"
-    "${K[@]}" logs "${name}" > "${out}/${name}.log" 2>&1 || true
-  done
-  for role in trainer orchestrator; do
+  "${K[@]}" get pods -l "app.kubernetes.io/instance=${release}" -o wide > "${out}/pods.txt"
+  for role in inference trainer orchestrator; do
     "${K[@]}" logs "${release}-${role}-0" > "${out}/${role}.log" 2>&1 || true
   done
-  local frontend
-  frontend="$("${K[@]}" get pods \
-    -l "nvidia.com/dynamo-graph-deployment-name=${release},nvidia.com/dynamo-component-type=frontend" \
-    -o jsonpath='{.items[0].metadata.name}')"
-  "${K[@]}" exec "${frontend}" -- \
+  "${K[@]}" exec "${release}-inference-0" -- \
     curl -fsS http://127.0.0.1:8000/metrics \
     > "${out}/frontend-metrics.prom" || true
   "${K[@]}" exec "${release}-trainer-0" -- \
@@ -249,9 +216,6 @@ clean_stage() {
   local release
   release="$(<"${out}/release-name")"
   helm uninstall "${release}" --namespace "${NAMESPACE}" || true
-  "${K[@]}" delete pod \
-    -l "nvidia.com/dynamo-graph-deployment-name=${release}" \
-    --ignore-not-found --wait=false || true
 }
 
 run_stage() {

@@ -17,7 +17,7 @@ orchestrator:
   replicas: 1
   autoStart: true
   command: >-
-    until curl -fsS http://${RELEASE_NAME}-frontend.${NAMESPACE}.svc.cluster.local:8000/health; do sleep 10; done;
+    until curl -fsS http://${RELEASE_NAME}-inference-0.${RELEASE_NAME}-inference-headless.${NAMESPACE}.svc.cluster.local:8000/health; do sleep 10; done;
     set +e;
     ${RUN_ROOT}/runtime/bin/orchestrator
     @ ${RUN_ROOT}/render/${STAGE}/configs/orchestrator.toml
@@ -43,8 +43,38 @@ orchestrator:
 
 inference:
   enabled: true
-  mode: dynamoGraph
+  mode: statefulset
+  replicas: 1
+  autoStart: true
+  command: >-
+    set +e;
+    ${RUN_ROOT}/runtime/bin/inference
+    @ ${RUN_ROOT}/render/${STAGE}/inference-local.toml
+    --output-dir ${RUN_ROOT}/outputs/${STAGE};
+    rc=$?;
+    echo "RL_INFERENCE_EXIT=${rc}";
+    sleep infinity
   runtimeClassName: ""
+  gpu:
+    enabled: true
+    count: 2
+  resources:
+    requests:
+      memory: "256Gi"
+      cpu: "24"
+  nodeSelector:
+    kubernetes.io/hostname: ${NODE_NAME}
+  env:
+    - name: HF_HOME
+      value: /data
+    - name: HF_HUB_OFFLINE
+      value: "1"
+    - name: NCCL_SOCKET_IFNAME
+      value: eth0
+    - name: GLOO_SOCKET_IFNAME
+      value: eth0
+    - name: PRIME_LOG_LEVEL
+      value: debug
 
 trainer:
   enabled: true

@@ -131,6 +131,10 @@ spec:
       {{- if .Values.inference.runtimeClassName }}
       runtimeClassName: {{ .Values.inference.runtimeClassName }}
       {{- end }}
+      {{- with .Values.inference.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.image.pullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

@@ -1,6 +1,5 @@
 max_steps = 15
 seq_len = 4096
-kubernetes = true
 
 [model]
 name = "Qwen/Qwen3-VL-4B-Instruct"
@@ -10,11 +9,10 @@ vision_encoder_attr = "model.visual"
 language_model_attr = "model.language_model"
 
 [deployment]
-type = "multi_node"
-gpus_per_node = 1
-num_train_nodes = 1
-num_infer_nodes = 2
-num_infer_replicas = 1
+type = "single_node"
+gpus_per_node = 4
+num_train_gpus = 1
+num_infer_gpus = 2
 
 [weight_broadcast]
 type = "nccl"
@@ -87,5 +85,5 @@ num_decode_replicas = 1
 type = "nccl"
 
 [inference.env_vars]
-HF_HOME = "/model-cache"
+HF_HOME = "/data"
 HF_HUB_OFFLINE = "1"

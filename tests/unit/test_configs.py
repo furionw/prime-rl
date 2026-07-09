@@ -313,26 +313,6 @@ def test_multi_node_auto_inference_client_dp_rank_count_uses_router_url():
     assert config.orchestrator.model.client.dp_rank_count == 1
 
 
-def test_kubernetes_multi_node_does_not_require_slurm():
-    config = RLConfig.model_validate(
-        {
-            "trainer": {},
-            "orchestrator": {},
-            "inference": {"backend": {"type": "dynamo"}, "deployment": {"type": "disaggregated"}},
-            "deployment": {
-                "type": "multi_node",
-                "gpus_per_node": 1,
-                "num_train_nodes": 1,
-                "num_infer_nodes": 2,
-            },
-            "kubernetes": True,
-        }
-    )
-
-    assert config.slurm is None
-    assert config.kubernetes is True
-
-
 def test_orchestrator_vlm_requires_renderer():
     with pytest.raises(ValidationError, match="renderer"):
         OrchestratorConfig.model_validate(

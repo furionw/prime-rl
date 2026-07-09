@@ -82,6 +82,8 @@ inference:
     type: ClusterIP
     port: 8000
 
+  nodeSelector: {}
+
   runtimeClassName: nvidia
 
   # Health probes for inference server (/health for startup/readiness, /liveness for engine liveness)
