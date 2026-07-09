@@ -135,6 +135,12 @@ render_stage() {
     if "${K[@]}" logs "${RENDER_POD}" --tail=50 2>/dev/null | grep -Fq RENDER_COMPLETE; then
       break
     fi
+    local phase
+    phase="$("${K[@]}" get pod "${RENDER_POD}" -o jsonpath='{.status.phase}')"
+    if [[ "${phase}" == Failed || "${phase}" == Succeeded ]]; then
+      "${K[@]}" logs "${RENDER_POD}" --tail=100
+      return 1
+    fi
     sleep 5
   done
   "${K[@]}" logs "${RENDER_POD}" | tee "${out}/render.log"

@@ -75,7 +75,7 @@ spec:
               cd "${PRIME_SRC}"
               uv sync --active --frozen
               python -m pip install pytest-benchmark
-              uv pip install --python "${OVERLAY}/bin/python" \
+              uv pip install --python "${OVERLAY}/bin/python" --no-deps \
                 -e deps/verifiers/environments/color_codeword_v1
               python -m pip install --no-deps -e "${PRIME_SRC}"
 
