@@ -123,6 +123,7 @@ spec:
               python -c "import dynamo.llm; print('dynamo.llm OK')"
               python -c "from dynamo import prometheus_names; print('dynamo OK')"
               python -c "import prime_rl, vllm; print('prime_rl OK', prime_rl.__path__, 'vllm', vllm.__version__)"
+              python -c "import prime_rl.utils.cp; import prime_rl.trainer.rl.train; print('prime_rl SDPA imports OK')"
 
               cd "${DYNAMO_SRC}"
               python -m pytest -q components/src/dynamo/vllm/tests/test_vllm_engine_generate.py
