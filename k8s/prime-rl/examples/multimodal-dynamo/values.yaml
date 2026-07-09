@@ -88,7 +88,8 @@ trainer:
     set +e;
     ${RUN_ROOT}/runtime/bin/trainer
     @ ${RUN_ROOT}/render/${STAGE}/configs/trainer.toml
-    --output-dir ${RUN_ROOT}/outputs/${STAGE};
+    --output-dir ${RUN_ROOT}/outputs/${STAGE}
+    --weight-broadcast.host "$POD_IP";
     rc=$?;
     echo "RL_TRAINER_EXIT=${rc}";
     sleep infinity
