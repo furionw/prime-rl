@@ -34,7 +34,9 @@ num_decode_replicas = 1
 prefill_env_vars = {"VLLM_ENABLE_MOE_DP_CHUNK"="0", "VLLM_DEEP_GEMM_WARMUP"="skip", "UCX_RCACHE_MAX_UNRELEASED"="1024"}
 decode_env_vars = {"VLLM_DEEP_GEMM_WARMUP"="skip", "UCX_RCACHE_MAX_UNRELEASED"="1024"}
 
-prefill_vllm_overrides = {"enable_dbo"=true}
+# dbo stays OFF for GLM-5.2: with it on, every prefill rank deterministically
+# times out DeepEP dispatch at boot (the GLM-5.1 recipe value does not carry over).
+prefill_vllm_overrides = {"enable_dbo"=false}
 # HiSparse host-resident decode: the full sparse-MLA KV lives in a 160 GiB
 # pinned host pool per DP rank (8 ranks/node -> 1.28 TiB pinned per decode
 # node); decode is served from per-request GPU hot buffers. max_num_seqs
