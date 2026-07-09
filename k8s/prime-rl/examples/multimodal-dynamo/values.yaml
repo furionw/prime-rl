@@ -71,6 +71,16 @@ inference:
       value: "1"
     - name: NCCL_SOCKET_IFNAME
       value: eth0
+    - name: NCCL_SOCKET_FAMILY
+      value: AF_INET
+    - name: NCCL_IB_DISABLE
+      value: "1"
+    - name: NCCL_NET
+      value: Socket
+    - name: NCCL_DEBUG
+      value: INFO
+    - name: NCCL_DEBUG_SUBSYS
+      value: INIT,NET
     - name: GLOO_SOCKET_IFNAME
       value: eth0
     - name: NIXL_PLUGIN_DIR
@@ -110,6 +120,16 @@ trainer:
       value: "1"
     - name: NCCL_SOCKET_IFNAME
       value: eth0
+    - name: NCCL_SOCKET_FAMILY
+      value: AF_INET
+    - name: NCCL_IB_DISABLE
+      value: "1"
+    - name: NCCL_NET
+      value: Socket
+    - name: NCCL_DEBUG
+      value: INFO
+    - name: NCCL_DEBUG_SUBSYS
+      value: INIT,NET
     - name: GLOO_SOCKET_IFNAME
       value: eth0
     - name: RANK
