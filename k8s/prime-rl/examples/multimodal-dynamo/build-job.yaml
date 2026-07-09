@@ -56,6 +56,7 @@ spec:
               git -C "${PRIME_SRC}" remote add origin "${PRIME_REPO}"
               git -C "${PRIME_SRC}" fetch --depth=1 origin "${PRIME_REF}"
               git -C "${PRIME_SRC}" checkout --detach FETCH_HEAD
+              git config --global url."https://github.com/".insteadOf git@github.com:
               git -C "${PRIME_SRC}" submodule update --init --recursive --depth=1
 
               python3 -m venv --system-site-packages "${OVERLAY}"

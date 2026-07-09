@@ -62,10 +62,22 @@ preflight() {
 build_overlay() {
   "${K[@]}" delete job "${BUILD_JOB}" --ignore-not-found --wait=true
   apply_template "${HERE}/build-job.yaml"
-  "${K[@]}" wait --for=condition=Complete "job/${BUILD_JOB}" --timeout=3600s || {
-    "${K[@]}" logs "job/${BUILD_JOB}" --tail=300
+  local completed=false
+  for _ in $(seq 1 360); do
+    if [[ "$("${K[@]}" get job "${BUILD_JOB}" -o jsonpath='{.status.succeeded}' 2>/dev/null || true)" == 1 ]]; then
+      completed=true
+      break
+    fi
+    if [[ "$("${K[@]}" get job "${BUILD_JOB}" -o jsonpath='{.status.failed}' 2>/dev/null || true)" == 1 ]]; then
+      "${K[@]}" logs "job/${BUILD_JOB}" --tail=300 | tee "${LOCAL_LOG_ROOT}/build.log"
+      return 1
+    fi
+    sleep 10
+  done
+  if [[ "${completed}" != true ]]; then
+    "${K[@]}" logs "job/${BUILD_JOB}" --tail=300 | tee "${LOCAL_LOG_ROOT}/build.log"
     return 1
-  }
+  fi
   "${K[@]}" logs "job/${BUILD_JOB}" | tee "${LOCAL_LOG_ROOT}/build.log"
 }
 
