@@ -9,6 +9,7 @@ RUN_ID="${RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 RUN_SLUG="$(printf '%s' "${RUN_ID}" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-')"
 RUN_ROOT="${RUN_ROOT:-/data/qiwa/prime-rl-mm/${RUN_ID}}"
 DYNAMO_REF="${DYNAMO_REF:-qiwa/generate-vllm-integration}"
+PRIME_REPO="${PRIME_REPO:-https://github.com/furionw/prime-rl.git}"
 PRIME_REF="${PRIME_REF:-qiwa/dynamo-k8s-mm-test}"
 IMAGE_DIGEST="${IMAGE_DIGEST:-sha256:e1c59a9ab1fccc5851ccd69e70d04ab93d1490dcac448a591bf6d4296c2216a3}"
 BASE_IMAGE="${BASE_IMAGE:-nvcr.io/nvstaging/ai-dynamo/vllm-runtime:qiwa-dev-vllm-arm64-07-09@${IMAGE_DIGEST}}"
@@ -40,11 +41,11 @@ NODE_NAME="${NODE_NAME:-$(select_node)}"
 BUILD_JOB="prime-mm-build-${RUN_SLUG}"
 BUILD_JOB="${BUILD_JOB//[^a-z0-9-]/-}"
 
-export NAMESPACE RUN_ID RUN_ROOT DYNAMO_REF PRIME_REF IMAGE_DIGEST BASE_IMAGE NODE_NAME BUILD_JOB
+export NAMESPACE RUN_ID RUN_ROOT DYNAMO_REF PRIME_REPO PRIME_REF IMAGE_DIGEST BASE_IMAGE NODE_NAME BUILD_JOB
 
 apply_template() {
   local template="$1"
-  local vars='$NAMESPACE $RUN_ID $RUN_ROOT $DYNAMO_REF $PRIME_REF $IMAGE_DIGEST $BASE_IMAGE $NODE_NAME $BUILD_JOB $RENDER_POD $STAGE $RELEASE_NAME $DOWNLOAD_POD $MODEL_NAME'
+  local vars='$NAMESPACE $RUN_ID $RUN_ROOT $DYNAMO_REF $PRIME_REPO $PRIME_REF $IMAGE_DIGEST $BASE_IMAGE $NODE_NAME $BUILD_JOB $RENDER_POD $STAGE $RELEASE_NAME $DOWNLOAD_POD $MODEL_NAME'
   envsubst "${vars}" < "${template}" | "${K_ALL[@]}" apply -f -
 }
 

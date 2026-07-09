@@ -31,6 +31,8 @@ spec:
               value: "${DYNAMO_REF}"
             - name: PRIME_REF
               value: "${PRIME_REF}"
+            - name: PRIME_REPO
+              value: "${PRIME_REPO}"
             - name: RUN_ROOT
               value: "${RUN_ROOT}"
           command: ["/bin/bash", "-lc"]
@@ -51,7 +53,7 @@ spec:
               git -C "${DYNAMO_SRC}" checkout --detach FETCH_HEAD
 
               git init "${PRIME_SRC}"
-              git -C "${PRIME_SRC}" remote add origin https://github.com/PrimeIntellect-ai/prime-rl.git
+              git -C "${PRIME_SRC}" remote add origin "${PRIME_REPO}"
               git -C "${PRIME_SRC}" fetch --depth=1 origin "${PRIME_REF}"
               git -C "${PRIME_SRC}" checkout --detach FETCH_HEAD
               git -C "${PRIME_SRC}" submodule update --init --recursive --depth=1
