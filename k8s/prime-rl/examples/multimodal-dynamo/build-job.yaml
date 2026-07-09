@@ -44,26 +44,33 @@ spec:
               PRIME_SRC="${RUN_ROOT}/src/prime-rl"
               MARKER="${RUN_ROOT}/runtime-manifest.json"
 
-              rm -rf "${OVERLAY}" "${RUN_ROOT}/src"
               export UV_CACHE_DIR="${RUN_ROOT}/uv-cache"
-              mkdir -p "${OVERLAY}" "${RUN_ROOT}/src" "${RUN_ROOT}/logs" "${UV_CACHE_DIR}"
+              mkdir -p "${RUN_ROOT}/src" "${RUN_ROOT}/logs" "${UV_CACHE_DIR}"
 
-              git init "${DYNAMO_SRC}"
-              git -C "${DYNAMO_SRC}" remote add origin https://github.com/ai-dynamo/dynamo.git
+              if [[ ! -d "${DYNAMO_SRC}/.git" ]]; then
+                git init "${DYNAMO_SRC}"
+                git -C "${DYNAMO_SRC}" remote add origin https://github.com/ai-dynamo/dynamo.git
+              fi
+              git -C "${DYNAMO_SRC}" remote set-url origin https://github.com/ai-dynamo/dynamo.git
               git -C "${DYNAMO_SRC}" fetch --depth=1 origin "${DYNAMO_REF}"
-              git -C "${DYNAMO_SRC}" checkout --detach FETCH_HEAD
+              git -C "${DYNAMO_SRC}" checkout --force --detach FETCH_HEAD
 
-              git init "${PRIME_SRC}"
-              git -C "${PRIME_SRC}" remote add origin "${PRIME_REPO}"
+              if [[ ! -d "${PRIME_SRC}/.git" ]]; then
+                git init "${PRIME_SRC}"
+                git -C "${PRIME_SRC}" remote add origin "${PRIME_REPO}"
+              fi
+              git -C "${PRIME_SRC}" remote set-url origin "${PRIME_REPO}"
               git -C "${PRIME_SRC}" fetch --depth=1 origin "${PRIME_REF}"
-              git -C "${PRIME_SRC}" checkout --detach FETCH_HEAD
+              git -C "${PRIME_SRC}" checkout --force --detach FETCH_HEAD
               git config --global url."https://github.com/".insteadOf git@github.com:
               git -C "${PRIME_SRC}" submodule update --init --recursive --depth=1
 
-              python3 -m venv --system-site-packages "${OVERLAY}"
+              if [[ ! -x "${OVERLAY}/bin/python" ]]; then
+                python3 -m venv --system-site-packages "${OVERLAY}"
+              fi
               export VIRTUAL_ENV="${OVERLAY}"
               export PATH="${OVERLAY}/bin:${PATH}"
-              python -m pip install --upgrade pip "uv>=0.11.1" pytest
+              python -m pip install --upgrade pip "uv>=0.11.1" pytest pytest-benchmark
 
               cd "${PRIME_SRC}"
               uv sync --active --frozen
@@ -71,7 +78,7 @@ spec:
                 -e deps/verifiers/environments/color_codeword_v1
               python -m pip install --no-deps -e "${PRIME_SRC}"
 
-              export CARGO_TARGET_DIR=/tmp/dynamo-target
+              export CARGO_TARGET_DIR="${RUN_ROOT}/cargo-target"
               cd "${DYNAMO_SRC}/lib/bindings/python"
               maturin develop --uv
               cd "${DYNAMO_SRC}/lib/bindings/kvbm"
