@@ -97,7 +97,7 @@ trainer:
       memory: "256Gi"
       cpu: "24"
   nodeSelector:
-    kubernetes.io/hostname: ${NODE_NAME}
+    kubernetes.io/hostname: ${TRAINER_NODE_NAME}
   env:
     - name: HF_HOME
       value: /data

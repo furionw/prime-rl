@@ -20,8 +20,8 @@ Run the complete sequence from this directory:
 ./run.sh all
 ```
 
-Set `RUN_ID`, `NODE_NAME`, `DYNAMO_REF`, `PRIME_REPO`, or `PRIME_REF` to resume or
-override a specific run. Individual phases are available as `preflight`,
+Set `RUN_ID`, `NODE_NAME`, `TRAINER_NODE_NAME`, `DYNAMO_REF`, `PRIME_REPO`, or
+`PRIME_REF` to resume or override a specific run. Individual phases are available as `preflight`,
 `build`, `smoke`, `learn`, and `clean`.
 
 Local logs and rendered manifests are written under

@@ -122,8 +122,9 @@ def test_process_specs_own_canonical_commands_and_environment(tmp_path: Path):
     )
 
     assert frontend.module == "dynamo.frontend"
-    assert frontend.arguments[-1] == "--enable-engine-apis"
+    assert frontend.arguments[-1] == "--router-reset-states"
     assert frontend.environment()["DYN_ENABLE_RL"] == "1"
+    assert frontend.environment()["DYN_VLLM_ENABLE_INFERENCE_V1_GENERATE"] == "1"
     assert prefill.module == "dynamo.vllm"
     assert prefill.arguments[-3:] == ("--disaggregation-mode", "prefill", "--enable-rl")
     assert prefill.environment()["ROLE"] == "prefill"

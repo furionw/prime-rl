@@ -18,9 +18,12 @@ K=(kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}")
 K_ALL=(kubectl --context "${KUBE_CONTEXT}")
 
 select_node() {
+  local max_used="$1"
+  local excluded_node="${2:-}"
   local best=""
   local best_used=999
   while read -r node; do
+    [[ "${node}" == "${excluded_node}" ]] && continue
     local used
     used="$("${K_ALL[@]}" get pods -A --field-selector="spec.nodeName=${node}" -o json |
       jq '[.items[] | select(.status.phase == "Running" or .status.phase == "Pending") |
@@ -30,22 +33,23 @@ select_node() {
       best_used="${used}"
     fi
   done < <("${K_ALL[@]}" get nodes -l nvidia.com/gpu.product=NVIDIA-GB200 -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
-  if [[ -z "${best}" || "${best_used}" -gt 1 ]]; then
-    echo "No GB200 node currently has three unreserved GPUs" >&2
+  if [[ -z "${best}" || "${best_used}" -gt "${max_used}" ]]; then
+    echo "No GB200 node satisfies the requested GPU capacity" >&2
     return 1
   fi
   echo "${best}"
 }
 
-NODE_NAME="${NODE_NAME:-$(select_node)}"
+NODE_NAME="${NODE_NAME:-$(select_node 2)}"
+TRAINER_NODE_NAME="${TRAINER_NODE_NAME:-$(select_node 3 "${NODE_NAME}")}"
 BUILD_JOB="prime-mm-build-${RUN_SLUG}"
 BUILD_JOB="${BUILD_JOB//[^a-z0-9-]/-}"
 
-export NAMESPACE RUN_ID RUN_ROOT DYNAMO_REF PRIME_REPO PRIME_REF IMAGE_DIGEST BASE_IMAGE NODE_NAME BUILD_JOB
+export NAMESPACE RUN_ID RUN_ROOT DYNAMO_REF PRIME_REPO PRIME_REF IMAGE_DIGEST BASE_IMAGE NODE_NAME TRAINER_NODE_NAME BUILD_JOB
 
 apply_template() {
   local template="$1"
-  local vars='$NAMESPACE $RUN_ID $RUN_ROOT $DYNAMO_REF $PRIME_REPO $PRIME_REF $IMAGE_DIGEST $BASE_IMAGE $NODE_NAME $BUILD_JOB $RENDER_POD $STAGE $RELEASE_NAME $DOWNLOAD_POD $MODEL_NAME'
+  local vars='$NAMESPACE $RUN_ID $RUN_ROOT $DYNAMO_REF $PRIME_REPO $PRIME_REF $IMAGE_DIGEST $BASE_IMAGE $NODE_NAME $TRAINER_NODE_NAME $BUILD_JOB $RENDER_POD $STAGE $RELEASE_NAME $DOWNLOAD_POD $MODEL_NAME'
   envsubst "${vars}" < "${template}" | "${K_ALL[@]}" apply -f -
 }
 
@@ -54,8 +58,10 @@ preflight() {
   "${K[@]}" get pvc shared-model-cache -o jsonpath='{.status.phase}' | grep -qx Bound
   "${K[@]}" get secret ngc-pull-secret >/dev/null
   "${K_ALL[@]}" get node "${NODE_NAME}" >/dev/null
+  "${K_ALL[@]}" get node "${TRAINER_NODE_NAME}" >/dev/null
   mkdir -p "${LOCAL_LOG_ROOT}"
-  printf 'run_id=%s\nnode=%s\nrun_root=%s\n' "${RUN_ID}" "${NODE_NAME}" "${RUN_ROOT}" |
+  printf 'run_id=%s\ninference_node=%s\ntrainer_node=%s\nrun_root=%s\n' \
+    "${RUN_ID}" "${NODE_NAME}" "${TRAINER_NODE_NAME}" "${RUN_ROOT}" |
     tee "${LOCAL_LOG_ROOT}/run.env"
 }
 
@@ -148,7 +154,7 @@ render_stage() {
   "${K[@]}" logs "${RENDER_POD}" | tee "${out}/render.log"
   rm -rf "${out}/render"
   "${K[@]}" cp "${RENDER_POD}:${RUN_ROOT}/render/${stage}" "${out}/render"
-  envsubst '$NAMESPACE $IMAGE_DIGEST $RUN_ROOT $STAGE $RELEASE_NAME $NODE_NAME' \
+  envsubst '$NAMESPACE $IMAGE_DIGEST $RUN_ROOT $STAGE $RELEASE_NAME $NODE_NAME $TRAINER_NODE_NAME' \
     < "${HERE}/values.yaml" > "${out}/values.yaml"
   "${K[@]}" delete pod "${RENDER_POD}" --wait=false >/dev/null
   printf '%s\n' "${RELEASE_NAME}" > "${out}/release-name"

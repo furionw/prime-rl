@@ -122,6 +122,7 @@ def build_frontend_process(
         **config.env_vars,
         "DYN_ENABLE_RL": "1",
         "DYN_RL_PORT": "8001",
+        "DYN_VLLM_ENABLE_INFERENCE_V1_GENERATE": "1",
     }
     return DynamoProcessSpec(
         module="dynamo.frontend",
@@ -133,7 +134,6 @@ def build_frontend_process(
             "--router-mode",
             "kv",
             "--router-reset-states",
-            "--enable-engine-apis",
         ),
         environment_items=_environment_items(environment),
     )
