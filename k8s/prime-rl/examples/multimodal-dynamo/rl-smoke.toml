@@ -26,6 +26,9 @@ group_size = 4
 pool_size = 4
 collect_inference_metrics = false
 
+[orchestrator.renderer]
+name = "default"
+
 [[orchestrator.post_batch_filters]]
 type = "gibberish"
 
