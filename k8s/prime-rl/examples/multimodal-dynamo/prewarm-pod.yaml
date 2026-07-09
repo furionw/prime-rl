@@ -11,7 +11,7 @@ spec:
   imagePullSecrets:
     - name: ngc-pull-secret
   nodeSelector:
-    kubernetes.io/hostname: ${TRAINER_NODE_NAME}
+    kubernetes.io/hostname: ${PREWARM_NODE}
   containers:
     - name: prewarm
       image: ${BASE_IMAGE}

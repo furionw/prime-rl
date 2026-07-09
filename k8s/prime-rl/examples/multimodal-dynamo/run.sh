@@ -44,28 +44,41 @@ NODE_NAME="${NODE_NAME:-$(select_node 2)}"
 TRAINER_NODE_NAME="${TRAINER_NODE_NAME:-$(select_node 3 "${NODE_NAME}")}"
 BUILD_JOB="prime-mm-build-${RUN_SLUG}"
 BUILD_JOB="${BUILD_JOB//[^a-z0-9-]/-}"
-PREWARM_POD="prime-mm-prewarm-${RUN_SLUG}"
-PREWARM_POD="${PREWARM_POD//[^a-z0-9-]/-}"
+PREWARM_INFERENCE_POD="prime-mm-prewarm-inference-${RUN_SLUG}"
+PREWARM_INFERENCE_POD="${PREWARM_INFERENCE_POD//[^a-z0-9-]/-}"
+PREWARM_TRAINER_POD="prime-mm-prewarm-trainer-${RUN_SLUG}"
+PREWARM_TRAINER_POD="${PREWARM_TRAINER_POD//[^a-z0-9-]/-}"
 
-export NAMESPACE RUN_ID RUN_ROOT DYNAMO_REF PRIME_REPO PRIME_REF IMAGE_DIGEST BASE_IMAGE NODE_NAME TRAINER_NODE_NAME BUILD_JOB PREWARM_POD
+export NAMESPACE RUN_ID RUN_ROOT DYNAMO_REF PRIME_REPO PRIME_REF IMAGE_DIGEST BASE_IMAGE NODE_NAME TRAINER_NODE_NAME BUILD_JOB PREWARM_INFERENCE_POD PREWARM_TRAINER_POD
 
 apply_template() {
   local template="$1"
-  local vars='$NAMESPACE $RUN_ID $RUN_ROOT $DYNAMO_REF $PRIME_REPO $PRIME_REF $IMAGE_DIGEST $BASE_IMAGE $NODE_NAME $TRAINER_NODE_NAME $BUILD_JOB $PREWARM_POD $RENDER_POD $STAGE $RELEASE_NAME $DOWNLOAD_POD $MODEL_NAME'
+  local vars='$NAMESPACE $RUN_ID $RUN_ROOT $DYNAMO_REF $PRIME_REPO $PRIME_REF $IMAGE_DIGEST $BASE_IMAGE $NODE_NAME $TRAINER_NODE_NAME $BUILD_JOB $PREWARM_POD $PREWARM_NODE $RENDER_POD $STAGE $RELEASE_NAME $DOWNLOAD_POD $MODEL_NAME'
   envsubst "${vars}" < "${template}" | "${K_ALL[@]}" apply -f -
 }
 
 start_image_prewarm() {
+  PREWARM_POD="${PREWARM_INFERENCE_POD}"
+  PREWARM_NODE="${NODE_NAME}"
+  export PREWARM_POD PREWARM_NODE
+  "${K[@]}" delete pod "${PREWARM_POD}" --ignore-not-found --wait=true
+  apply_template "${HERE}/prewarm-pod.yaml"
+
+  PREWARM_POD="${PREWARM_TRAINER_POD}"
+  PREWARM_NODE="${TRAINER_NODE_NAME}"
+  export PREWARM_POD PREWARM_NODE
   "${K[@]}" delete pod "${PREWARM_POD}" --ignore-not-found --wait=true
   apply_template "${HERE}/prewarm-pod.yaml"
 }
 
 finish_image_prewarm() {
-  if ! "${K[@]}" wait --for=jsonpath='{.status.phase}'=Succeeded "pod/${PREWARM_POD}" --timeout=600s; then
-    "${K[@]}" describe pod "${PREWARM_POD}" >&2 || true
-    return 1
-  fi
-  "${K[@]}" delete pod "${PREWARM_POD}" --wait=false >/dev/null
+  for pod in "${PREWARM_INFERENCE_POD}" "${PREWARM_TRAINER_POD}"; do
+    if ! "${K[@]}" wait --for=jsonpath='{.status.phase}'=Succeeded "pod/${pod}" --timeout=600s; then
+      "${K[@]}" describe pod "${pod}" >&2 || true
+      return 1
+    fi
+    "${K[@]}" delete pod "${pod}" --wait=false >/dev/null
+  done
 }
 
 preflight() {
