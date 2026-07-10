@@ -45,7 +45,14 @@ spec:
               MARKER="${RUN_ROOT}/runtime-manifest.json"
 
               export UV_CACHE_DIR="${RUN_ROOT}/uv-cache"
-              mkdir -p "${RUN_ROOT}/src" "${RUN_ROOT}/logs" "${UV_CACHE_DIR}"
+              export PIP_CACHE_DIR="${RUN_ROOT}/pip-cache"
+              export CARGO_HOME="${RUN_ROOT}/cargo-home"
+              mkdir -p \
+                "${RUN_ROOT}/src" \
+                "${RUN_ROOT}/logs" \
+                "${UV_CACHE_DIR}" \
+                "${PIP_CACHE_DIR}" \
+                "${CARGO_HOME}"
 
               if [[ ! -d "${DYNAMO_SRC}/.git" ]]; then
                 git init "${DYNAMO_SRC}"
