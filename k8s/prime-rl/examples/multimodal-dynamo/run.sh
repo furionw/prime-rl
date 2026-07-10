@@ -20,20 +20,37 @@ K_ALL=(kubectl --context "${KUBE_CONTEXT}")
 select_node() {
   local max_used="$1"
   local excluded_node="${2:-}"
-  local best=""
-  local best_used=999
-  while read -r node; do
-    [[ "${node}" == "${excluded_node}" ]] && continue
-    local used
-    used="$("${K_ALL[@]}" get pods -A --field-selector="spec.nodeName=${node}" -o json |
-      jq '[.items[] | select(.status.phase == "Running" or .status.phase == "Pending") |
-        .spec.containers[].resources.requests["nvidia.com/gpu"] // "0" | tonumber] | add // 0')"
-    if (( used < best_used )); then
-      best="${node}"
-      best_used="${used}"
-    fi
-  done < <("${K_ALL[@]}" get nodes -l nvidia.com/gpu.product=NVIDIA-GB200 -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
-  if [[ -z "${best}" || "${best_used}" -gt "${max_used}" ]]; then
+  local nodes
+  local best
+  nodes="$("${K_ALL[@]}" get nodes -l nvidia.com/gpu.product=NVIDIA-GB200 -o json |
+    jq -c '[.items[].metadata.name]')"
+  best="$("${K_ALL[@]}" get pods -A -o json |
+    jq -r \
+      --argjson nodes "${nodes}" \
+      --arg excluded "${excluded_node}" \
+      --argjson max_used "${max_used}" '
+        . as $pods
+        | [
+            $nodes[] as $node
+            | select($node != $excluded)
+            | {
+                node: $node,
+                used: ([
+                  $pods.items[]
+                  | select(
+                      .spec.nodeName == $node
+                      and (.status.phase == "Running" or .status.phase == "Pending")
+                    )
+                  | .spec.containers[]?
+                  | (.resources.requests["nvidia.com/gpu"] // "0" | tonumber)
+                ] | add // 0)
+              }
+            | select(.used <= $max_used)
+          ]
+        | sort_by(.used, .node)
+        | .[0].node // empty
+      ')"
+  if [[ -z "${best}" ]]; then
     echo "No GB200 node satisfies the requested GPU capacity" >&2
     return 1
   fi
