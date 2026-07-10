@@ -38,6 +38,8 @@ orchestrator:
       value: /data
     - name: HF_HUB_OFFLINE
       value: "1"
+    - name: UV_CACHE_DIR
+      value: ${RUN_ROOT}/uv-cache
     - name: PRIME_LOG_LEVEL
       value: debug
 
