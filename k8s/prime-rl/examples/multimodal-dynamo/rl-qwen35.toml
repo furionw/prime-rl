@@ -88,3 +88,4 @@ type = "nccl"
 [inference.env_vars]
 HF_HOME = "/data"
 HF_HUB_OFFLINE = "1"
+VLLM_SSM_CONV_STATE_LAYOUT = "DS"

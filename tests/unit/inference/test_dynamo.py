@@ -49,6 +49,11 @@ def test_dense_multimodal_recipe_uses_expected_model_and_disables_expert_paralle
     assert config["inference"]["enable_expert_parallel"] is False
 
 
+def test_qwen35_multimodal_recipe_uses_required_mamba_state_layout():
+    config = tomllib.loads((RECIPE / "rl-qwen35.toml").read_text())
+    assert config["inference"]["env_vars"]["VLLM_SSM_CONV_STATE_LAYOUT"] == "DS"
+
+
 def test_multimodal_recipe_clears_stage_output_before_rendering():
     render_pod = (RECIPE / "render-pod.yaml").read_text()
     assert 'rm -rf "${OUTPUT}" "${RUN_OUTPUT}"' in render_pod
