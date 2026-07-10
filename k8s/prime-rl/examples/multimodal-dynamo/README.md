@@ -31,6 +31,16 @@ the validated runtime overlay when its image and source commit manifest still
 match. Individual phases are available as `preflight`, `build`, `smoke`,
 `learn`, and `clean`.
 
+For a code-unchanged smoke rerun, reuse `RUN_ID` and run `./run.sh smoke`; this
+skips the overlay build. The shared PVC persists the Hugging Face model cache,
+uv and pip caches, Cargo registry and target directories, and the validated
+runtime overlay. Image layers are node-local, so the prewarm phase may still
+take about three minutes on a node that has not pulled the image before. In a
+measured warm-node smoke run, the model cache check took less than a second,
+the two vLLM workers became ready about 2 minutes 45 seconds after Helm deploy,
+16 multimodal rollouts took 40 seconds, and the first trainer step took 55
+seconds.
+
 Local logs and rendered manifests are written under
 `~/workspace/dynamo-tmp/logs/07-09/multimodal-rl-k8s/<run-id>/`. The driver
 collects evidence before uninstalling each Helm release. It preserves the PVC

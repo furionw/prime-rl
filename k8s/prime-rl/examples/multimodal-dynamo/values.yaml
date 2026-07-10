@@ -21,7 +21,6 @@ orchestrator:
     set +e;
     ${RUN_ROOT}/runtime/bin/orchestrator
     @ ${RUN_ROOT}/render/${STAGE}/configs/orchestrator.toml
-    --output-dir ${RUN_ROOT}/outputs/${STAGE}
     --model.client.base-url "$INFERENCE_URL"
     --weight-broadcast.host ${RELEASE_NAME}-trainer.${NAMESPACE}.svc.cluster.local;
     rc=$?;

@@ -57,6 +57,44 @@ select_node() {
   echo "${best}"
 }
 
+verify_gpu_capacity() {
+  local pods
+  local inference_used
+  local trainer_used
+  pods="$("${K_ALL[@]}" get pods -A -o json)" || return 1
+  inference_used="$(jq -r --arg node "${NODE_NAME}" '
+    [
+      .items[]
+      | select(
+          .spec.nodeName == $node
+          and (.status.phase == "Running" or .status.phase == "Pending")
+        )
+      | .spec.containers[]?
+      | (.resources.requests["nvidia.com/gpu"] // "0" | tonumber)
+    ] | add // 0
+  ' <<<"${pods}")" || return 1
+  trainer_used="$(jq -r --arg node "${TRAINER_NODE_NAME}" '
+    [
+      .items[]
+      | select(
+          .spec.nodeName == $node
+          and (.status.phase == "Running" or .status.phase == "Pending")
+        )
+      | .spec.containers[]?
+      | (.resources.requests["nvidia.com/gpu"] // "0" | tonumber)
+    ] | add // 0
+  ' <<<"${pods}")" || return 1
+
+  if (( inference_used > 2 )); then
+    echo "Inference node ${NODE_NAME} no longer has 2 free GPUs (${inference_used}/4 allocated)" >&2
+    return 1
+  fi
+  if (( trainer_used > 3 )); then
+    echo "Trainer node ${TRAINER_NODE_NAME} no longer has 1 free GPU (${trainer_used}/4 allocated)" >&2
+    return 1
+  fi
+}
+
 NODE_NAME="${NODE_NAME:-$(select_node 2)}"
 TRAINER_NODE_NAME="${TRAINER_NODE_NAME:-$(select_node 3 "${NODE_NAME}")}"
 BUILD_JOB="prime-mm-build-${RUN_SLUG}"
@@ -210,13 +248,14 @@ deploy_stage() {
   local out="${LOCAL_LOG_ROOT}/${stage}"
   local release
   release="$(<"${out}/release-name")"
+  verify_gpu_capacity || return 1
   helm upgrade --install "${release}" "${CHART}" \
     --namespace "${NAMESPACE}" \
-    -f "${out}/values.yaml"
+    -f "${out}/values.yaml" || return 1
 
-  wait_for_pod_ready "${release}" inference 1800
-  wait_for_pod_ready "${release}" trainer 1800
-  wait_for_pod_ready "${release}" orchestrator 300
+  wait_for_pod_ready "${release}" inference 1800 || return 1
+  wait_for_pod_ready "${release}" trainer 1800 || return 1
+  wait_for_pod_ready "${release}" orchestrator 300 || return 1
 }
 
 wait_for_pod_ready() {
@@ -255,7 +294,9 @@ wait_stage() {
   local deadline=$(( $(date +%s) + timeout ))
 
   while (( $(date +%s) < deadline )); do
-    for process_role in inference trainer; do
+    local orchestrator_done=false
+    local trainer_done=false
+    for process_role in inference trainer orchestrator; do
       local process_logs
       local process_role_upper
       process_logs="$("${K[@]}" logs "${release}-${process_role}-0" --tail=120 2>&1 || true)"
@@ -264,19 +305,20 @@ wait_stage() {
         printf '%s\n' "${process_logs}" >&2
         return 1
       fi
+      if [[ "${process_role}" == orchestrator ]] && grep -Fq 'RL_ORCHESTRATOR_EXIT=0' <<<"${process_logs}"; then
+        orchestrator_done=true
+      fi
+      if [[ "${process_role}" == trainer ]] && grep -Fq 'RL_TRAINER_EXIT=0' <<<"${process_logs}"; then
+        trainer_done=true
+      fi
     done
-    local logs
-    logs="$("${K[@]}" logs "${release}-orchestrator-0" --tail=120 2>&1 || true)"
-    if grep -Fq 'RL_ORCHESTRATOR_EXIT=0' <<<"${logs}"; then
+    if [[ "${orchestrator_done}" == true && "${trainer_done}" == true ]]; then
       return 0
-    fi
-    if grep -Eq 'RL_ORCHESTRATOR_EXIT=[1-9]' <<<"${logs}"; then
-      printf '%s\n' "${logs}" >&2
-      return 1
     fi
     sleep 30
   done
-  "${K[@]}" logs "${release}-orchestrator-0" --tail=300
+  "${K[@]}" logs "${release}-orchestrator-0" --tail=300 || true
+  "${K[@]}" logs "${release}-trainer-0" --tail=300 || true
   return 1
 }
 
