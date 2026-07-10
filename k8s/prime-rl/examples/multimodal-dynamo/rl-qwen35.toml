@@ -26,7 +26,7 @@ pool_size = 4
 collect_inference_metrics = false
 
 [orchestrator.renderer]
-name = "default"
+name = "qwen3.5"
 
 [[orchestrator.post_batch_filters]]
 type = "gibberish"

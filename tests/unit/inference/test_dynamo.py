@@ -36,16 +36,19 @@ def disaggregated_config(**overrides) -> InferenceConfig:
 
 
 @pytest.mark.parametrize(
-    ("stage", "model_name"),
+    ("stage", "model_name", "renderer_name"),
     [
-        ("smoke", "Qwen/Qwen3-VL-2B-Instruct"),
-        ("qwen35", "Qwen/Qwen3.5-2B"),
-        ("learn", "Qwen/Qwen3-VL-4B-Instruct"),
+        ("smoke", "Qwen/Qwen3-VL-2B-Instruct", "qwen3-vl"),
+        ("qwen35", "Qwen/Qwen3.5-2B", "qwen3.5"),
+        ("learn", "Qwen/Qwen3-VL-4B-Instruct", "qwen3-vl"),
     ],
 )
-def test_dense_multimodal_recipe_uses_expected_model_and_disables_expert_parallel(stage: str, model_name: str):
+def test_dense_multimodal_recipe_uses_expected_model_renderer_and_disables_expert_parallel(
+    stage: str, model_name: str, renderer_name: str
+):
     config = tomllib.loads((RECIPE / f"rl-{stage}.toml").read_text())
     assert config["model"]["name"] == model_name
+    assert config["orchestrator"]["renderer"]["name"] == renderer_name
     assert config["inference"]["enable_expert_parallel"] is False
 
 
