@@ -10,10 +10,13 @@ image:
   repository: primeintellect/prime-rl
   pullPolicy: IfNotPresent
   tag: "main"
+  digest: ""
+  pullSecrets: []
 
 # Shared storage configuration
 storage:
   enabled: true
+  existingClaim: ""
   # PVC name will be automatically set to {{ .Release.Name }}-shared-data
   storageClassName: nfs
   accessModes:
@@ -79,7 +82,14 @@ inference:
     type: ClusterIP
     port: 8000
 
+  nodeSelector: {}
+
   runtimeClassName: nvidia
+
+  # Optional memory-backed /dev/shm for NCCL and multiprocessing workloads.
+  sharedMemory:
+    enabled: false
+    sizeLimit: 1Gi
 
   # Health probes for inference server (/health for startup/readiness, /liveness for engine liveness)
   probes:
@@ -127,7 +137,14 @@ trainer:
 
   env: []
 
+  nodeSelector: {}
+
   runtimeClassName: nvidia
+
+  # Optional memory-backed /dev/shm for NCCL and multiprocessing workloads.
+  sharedMemory:
+    enabled: false
+    sizeLimit: 1Gi
 
   # Health probes for trainer (requires metrics_server config)
   probes:

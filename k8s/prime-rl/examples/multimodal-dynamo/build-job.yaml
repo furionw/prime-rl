@@ -1,0 +1,180 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${BUILD_JOB}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: prime-rl-mm-overlay
+    prime-rl.nvidia.com/run-id: ${RUN_ID}
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prime-rl-mm-overlay
+        prime-rl.nvidia.com/run-id: ${RUN_ID}
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ngc-pull-secret
+      nodeSelector:
+        kubernetes.io/hostname: ${NODE_NAME}
+      containers:
+        - name: build
+          image: ${BASE_IMAGE}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: BASE_IMAGE
+              value: "${BASE_IMAGE}"
+            - name: DYNAMO_REF
+              value: "${DYNAMO_REF}"
+            - name: PRIME_REF
+              value: "${PRIME_REF}"
+            - name: PRIME_REPO
+              value: "${PRIME_REPO}"
+            - name: RUN_ROOT
+              value: "${RUN_ROOT}"
+          command: ["/bin/bash", "-lc"]
+          args:
+            - |
+              set -euo pipefail
+              OVERLAY="${RUN_ROOT}/runtime"
+              DYNAMO_SRC="${RUN_ROOT}/src/dynamo"
+              PRIME_SRC="${RUN_ROOT}/src/prime-rl"
+              MARKER="${RUN_ROOT}/runtime-manifest.json"
+
+              export UV_CACHE_DIR="${RUN_ROOT}/uv-cache"
+              export PIP_CACHE_DIR="${RUN_ROOT}/pip-cache"
+              export CARGO_HOME="${RUN_ROOT}/cargo-home"
+              mkdir -p \
+                "${RUN_ROOT}/src" \
+                "${RUN_ROOT}/logs" \
+                "${UV_CACHE_DIR}" \
+                "${PIP_CACHE_DIR}" \
+                "${CARGO_HOME}"
+
+              if [[ ! -d "${DYNAMO_SRC}/.git" ]]; then
+                git init "${DYNAMO_SRC}"
+                git -C "${DYNAMO_SRC}" remote add origin https://github.com/ai-dynamo/dynamo.git
+              fi
+              git -C "${DYNAMO_SRC}" remote set-url origin https://github.com/ai-dynamo/dynamo.git
+              git -C "${DYNAMO_SRC}" fetch --depth=1 origin "${DYNAMO_REF}"
+              git -C "${DYNAMO_SRC}" checkout --force --detach FETCH_HEAD
+
+              if [[ ! -d "${PRIME_SRC}/.git" ]]; then
+                git init "${PRIME_SRC}"
+                git -C "${PRIME_SRC}" remote add origin "${PRIME_REPO}"
+              fi
+              git -C "${PRIME_SRC}" remote set-url origin "${PRIME_REPO}"
+              git -C "${PRIME_SRC}" fetch --depth=1 origin "${PRIME_REF}"
+              git -C "${PRIME_SRC}" checkout --force --detach FETCH_HEAD
+              git config --global url."https://github.com/".insteadOf git@github.com:
+              git -C "${PRIME_SRC}" submodule update --init --recursive --depth=1
+
+              if [[ -x "${OVERLAY}/bin/python" && -f "${MARKER}" ]] &&
+                python - "${MARKER}" <<'PY'
+              import json
+              import os
+              import subprocess
+              import sys
+              from pathlib import Path
+
+              marker = json.loads(Path(sys.argv[1]).read_text())
+              root = Path(os.environ["RUN_ROOT"])
+              expected = {
+                  "base_image": os.environ.get("BASE_IMAGE", ""),
+                  "dynamo_sha": subprocess.check_output(
+                      ["git", "-C", str(root / "src/dynamo"), "rev-parse", "HEAD"],
+                      text=True,
+                  ).strip(),
+                  "prime_sha": subprocess.check_output(
+                      ["git", "-C", str(root / "src/prime-rl"), "rev-parse", "HEAD"],
+                      text=True,
+                  ).strip(),
+                  "runtime": str(root / "runtime"),
+              }
+              raise SystemExit(0 if marker == expected else 1)
+              PY
+              then
+                export VIRTUAL_ENV="${OVERLAY}"
+                export PATH="${OVERLAY}/bin:${PATH}"
+                python -c "import dynamo.llm, prime_rl, vllm; print('runtime cache hit')"
+                cat "${MARKER}"
+                exit 0
+              fi
+
+              if [[ ! -x "${OVERLAY}/bin/python" ]]; then
+                python3 -m venv --system-site-packages "${OVERLAY}"
+              fi
+              export VIRTUAL_ENV="${OVERLAY}"
+              export PATH="${OVERLAY}/bin:${PATH}"
+              python -m pip install --upgrade pip "uv>=0.11.1" pytest
+
+              cd "${PRIME_SRC}"
+              uv sync --active --frozen
+              python -m pip install pytest-benchmark
+              uv pip install --python "${OVERLAY}/bin/python" --no-deps \
+                -e deps/verifiers/environments/color_codeword_v1
+              python -m pip install --no-deps -e "${PRIME_SRC}"
+
+              export CARGO_TARGET_DIR="${RUN_ROOT}/cargo-target/python"
+              cd "${DYNAMO_SRC}/lib/bindings/python"
+              maturin develop --uv
+              python -c "from dynamo._core import AicPerfConfig; print('dynamo._core OK')"
+              export CARGO_TARGET_DIR="${RUN_ROOT}/cargo-target/kvbm"
+              cd "${DYNAMO_SRC}/lib/bindings/kvbm"
+              maturin develop --uv --features block-manager
+              python -m pip install --no-deps -e "${DYNAMO_SRC}"
+
+              python -c "import dynamo.llm; print('dynamo.llm OK')"
+              python -c "from dynamo import prometheus_names; print('dynamo OK')"
+              python -c "import prime_rl, vllm; print('prime_rl OK', prime_rl.__path__, 'vllm', vllm.__version__)"
+              python -c "import prime_rl.utils.cp; import prime_rl.trainer.rl.train; print('prime_rl SDPA imports OK')"
+              NIXL_PLUGIN_DIR="${OVERLAY}/lib/python3.12/site-packages/.nixl_cu13.mesonpy.libs/plugins" \
+                UCX_MODULE_DIR="${OVERLAY}/lib/python3.12/site-packages/nixl_cu13.libs/ucx" \
+                python -c "from nixl._api import nixl_agent; assert 'UCX' in nixl_agent('build-check').get_plugin_list(); print('NIXL UCX plugin OK')"
+
+              cd "${DYNAMO_SRC}"
+              python -m pytest -q \
+                components/src/dynamo/vllm/tests/test_vllm_engine_generate.py \
+                components/src/dynamo/vllm/tests/test_runtime_metadata.py
+
+              cd "${PRIME_SRC}"
+              python -m pytest -q \
+                tests/unit/inference/test_dynamo.py \
+                tests/unit/inference/test_dgd.py \
+                tests/unit/inference/test_helm_dgd.py \
+                tests/unit/utils/test_client.py
+
+              python - <<'PY'
+              import json
+              import os
+              import subprocess
+              from pathlib import Path
+
+              root = Path(os.environ["RUN_ROOT"])
+              data = {
+                  "base_image": os.environ.get("BASE_IMAGE", ""),
+                  "dynamo_sha": subprocess.check_output(
+                      ["git", "-C", str(root / "src/dynamo"), "rev-parse", "HEAD"],
+                      text=True,
+                  ).strip(),
+                  "prime_sha": subprocess.check_output(
+                      ["git", "-C", str(root / "src/prime-rl"), "rev-parse", "HEAD"],
+                      text=True,
+                  ).strip(),
+                  "runtime": str(root / "runtime"),
+              }
+              (root / "runtime-manifest.json").write_text(
+                  json.dumps(data, indent=2, sort_keys=True) + "\n"
+              )
+              print(json.dumps(data, sort_keys=True))
+              PY
+          volumeMounts:
+            - name: shared
+              mountPath: /data
+      volumes:
+        - name: shared
+          persistentVolumeClaim:
+            claimName: shared-model-cache

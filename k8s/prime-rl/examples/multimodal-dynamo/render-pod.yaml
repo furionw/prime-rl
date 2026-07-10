@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${RENDER_POD}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: prime-rl-mm-render
+    prime-rl.nvidia.com/run-id: ${RUN_ID}
+spec:
+  restartPolicy: Never
+  imagePullSecrets:
+    - name: ngc-pull-secret
+  nodeSelector:
+    kubernetes.io/hostname: ${NODE_NAME}
+  containers:
+    - name: render
+      image: ${BASE_IMAGE}
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: RUN_ROOT
+          value: "${RUN_ROOT}"
+        - name: STAGE
+          value: "${STAGE}"
+        - name: RELEASE_NAME
+          value: "${RELEASE_NAME}"
+        - name: NAMESPACE
+          value: "${NAMESPACE}"
+        - name: NODE_NAME
+          value: "${NODE_NAME}"
+        - name: BASE_IMAGE
+          value: "${BASE_IMAGE}"
+        - name: IMAGE_DIGEST
+          value: "${IMAGE_DIGEST}"
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -euo pipefail
+          OVERLAY="${RUN_ROOT}/runtime"
+          PRIME_SRC="${RUN_ROOT}/src/prime-rl"
+          CONFIG="${PRIME_SRC}/k8s/prime-rl/examples/multimodal-dynamo/rl-${STAGE}.toml"
+          OUTPUT="${RUN_ROOT}/render/${STAGE}"
+          RUN_OUTPUT="${RUN_ROOT}/outputs/${STAGE}"
+          export VIRTUAL_ENV="${OVERLAY}"
+          export PATH="${OVERLAY}/bin:${PATH}"
+          rm -rf "${OUTPUT}" "${RUN_OUTPUT}"
+          mkdir -p "${OUTPUT}/configs" "${RUN_OUTPUT}"
+
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          import tomli_w
+
+          from prime_rl.configs.rl import RLConfig
+          from prime_rl.entrypoints.rl import write_subconfigs
+          from prime_rl.utils.config import cli
+
+          root = Path(os.environ["RUN_ROOT"])
+          stage = os.environ["STAGE"]
+          source = root / "src/prime-rl/k8s/prime-rl/examples/multimodal-dynamo" / f"rl-{stage}.toml"
+          output = root / "render" / stage
+          run_output = root / "outputs" / stage
+          config = cli(
+              RLConfig,
+              args=["@", str(source), "--output-dir", str(run_output)],
+          )
+          write_subconfigs(config, output / "configs")
+          assert config.inference is not None
+          inference = config.inference.model_dump(
+              exclude={"slurm", "output_dir", "dry_run"},
+              exclude_none=True,
+              mode="json",
+          )
+          with (output / "inference-local.toml").open("wb") as stream:
+              tomli_w.dump(inference, stream)
+          PY
+
+          echo RENDER_COMPLETE
+          sleep 3600
+      volumeMounts:
+        - name: shared
+          mountPath: /data
+  volumes:
+    - name: shared
+      persistentVolumeClaim:
+        claimName: shared-model-cache

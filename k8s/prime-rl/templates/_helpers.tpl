@@ -5,6 +5,20 @@ Expand the name of the chart.
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{/* Resolve a tag- or digest-pinned workload image. */}}
+{{- define "prime-rl.image" -}}
+{{- if .Values.image.digest -}}
+{{- printf "%s@%s" .Values.image.repository .Values.image.digest -}}
+{{- else -}}
+{{- printf "%s:%s" .Values.image.repository .Values.image.tag -}}
+{{- end -}}
+{{- end }}
+
+{{/* Reuse a caller-provided PVC when configured. */}}
+{{- define "prime-rl.storageClaimName" -}}
+{{- default (printf "%s-shared-data" .Release.Name) .Values.storage.existingClaim -}}
+{{- end }}
+
 {{- define "prime-rl.inferenceUrls" -}}
 {{- if eq .Values.inference.mode "dynamoGraph" -}}
 {{- printf "http://%s-frontend.%s.svc.cluster.local:8000/v1" .Release.Name .Values.namespace -}}

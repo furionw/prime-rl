@@ -1,0 +1,90 @@
+max_steps = 1
+seq_len = 4096
+
+[model]
+name = "Qwen/Qwen3-VL-2B-Instruct"
+
+[model.vlm]
+vision_encoder_attr = "model.visual"
+language_model_attr = "model.language_model"
+
+[deployment]
+type = "single_node"
+gpus_per_node = 4
+num_train_gpus = 1
+num_infer_gpus = 2
+
+[weight_broadcast]
+type = "nccl"
+port = 29501
+timeout = 1200
+
+[orchestrator]
+batch_size = 16
+group_size = 4
+pool_size = 4
+collect_inference_metrics = false
+
+[orchestrator.renderer]
+name = "qwen3-vl"
+
+[[orchestrator.post_batch_filters]]
+type = "gibberish"
+
+[[orchestrator.post_batch_filters]]
+type = "repetition"
+
+[[orchestrator.post_batch_filters]]
+type = "zero_advantage"
+enforce = false
+
+[orchestrator.train.sampling]
+max_completion_tokens = 64
+
+[[orchestrator.train.env]]
+name = "color-codeword"
+taskset = { id = "color-codeword-v1", images_per_turn = 1, num_examples = 1000 }
+harness = { id = "null", runtime = { type = "subprocess" } }
+
+[trainer]
+
+[trainer.model]
+optimization_dtype = "bfloat16"
+reduce_dtype = "bfloat16"
+attn = "sdpa"
+compile = "None"
+ac = "None"
+ac_offloading = "None"
+optim_cpu_offload = false
+
+[trainer.optim]
+lr = 3e-6
+
+[inference]
+enable_expert_parallel = false
+
+[inference.backend]
+type = "dynamo"
+
+[inference.model]
+enforce_eager = true
+max_model_len = 4096
+
+[inference.parallel]
+dp = 1
+tp = 1
+
+[inference.deployment]
+type = "disaggregated"
+gpus_per_node = 1
+prefill_nodes_per_replica = 1
+decode_nodes_per_replica = 1
+num_prefill_replicas = 1
+num_decode_replicas = 1
+
+[inference.weight_broadcast]
+type = "nccl"
+
+[inference.env_vars]
+HF_HOME = "/data"
+HF_HUB_OFFLINE = "1"

@@ -1,0 +1,34 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${DOWNLOAD_POD}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/name: prime-rl-mm-download
+    prime-rl.nvidia.com/run-id: ${RUN_ID}
+spec:
+  restartPolicy: Never
+  imagePullSecrets:
+    - name: ngc-pull-secret
+  nodeSelector:
+    kubernetes.io/hostname: ${NODE_NAME}
+  containers:
+    - name: download
+      image: ${BASE_IMAGE}
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: HF_HOME
+          value: /data
+        - name: MODEL_NAME
+          value: "${MODEL_NAME}"
+      command:
+        - ${RUN_ROOT}/runtime/bin/python
+        - -c
+        - "import os; from huggingface_hub import snapshot_download; print(snapshot_download(os.environ['MODEL_NAME']))"
+      volumeMounts:
+        - name: shared
+          mountPath: /data
+  volumes:
+    - name: shared
+      persistentVolumeClaim:
+        claimName: shared-model-cache

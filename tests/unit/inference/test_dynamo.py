@@ -1,4 +1,5 @@
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,8 @@ from prime_rl.inference.dynamo import (
     build_worker_process,
     write_role_engine_configs,
 )
+
+RECIPE = Path(__file__).parents[3] / "k8s" / "prime-rl" / "examples" / "multimodal-dynamo"
 
 
 def disaggregated_config(**overrides) -> InferenceConfig:
@@ -30,6 +33,39 @@ def disaggregated_config(**overrides) -> InferenceConfig:
     }
     data.update(overrides)
     return InferenceConfig.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    ("stage", "model_name", "renderer_name"),
+    [
+        ("smoke", "Qwen/Qwen3-VL-2B-Instruct", "qwen3-vl"),
+        ("qwen35", "Qwen/Qwen3.5-2B", "qwen3.5"),
+        ("learn", "Qwen/Qwen3-VL-4B-Instruct", "qwen3-vl"),
+    ],
+)
+def test_dense_multimodal_recipe_uses_expected_model_renderer_and_disables_expert_parallel(
+    stage: str, model_name: str, renderer_name: str
+):
+    config = tomllib.loads((RECIPE / f"rl-{stage}.toml").read_text())
+    assert config["model"]["name"] == model_name
+    assert config["orchestrator"]["renderer"]["name"] == renderer_name
+    assert config["inference"]["enable_expert_parallel"] is False
+
+
+def test_qwen35_multimodal_recipe_uses_required_mamba_state_layout():
+    config = tomllib.loads((RECIPE / "rl-qwen35.toml").read_text())
+    assert config["inference"]["env_vars"]["VLLM_SSM_CONV_STATE_LAYOUT"] == "DS"
+
+
+def test_multimodal_recipe_clears_stage_output_before_rendering():
+    render_pod = (RECIPE / "render-pod.yaml").read_text()
+    assert 'rm -rf "${OUTPUT}" "${RUN_OUTPUT}"' in render_pod
+
+
+def test_multimodal_recipe_overrides_nested_orchestrator_client():
+    values = (RECIPE / "values.yaml").read_text()
+    assert '--model.client.base-url "$INFERENCE_URL"' in values
+    assert '--client.base-url "$INFERENCE_URL"' not in values
 
 
 def test_role_engine_configs_share_nixl_and_only_prefill_publishes_events(tmp_path: Path):
@@ -122,8 +158,9 @@ def test_process_specs_own_canonical_commands_and_environment(tmp_path: Path):
     )
 
     assert frontend.module == "dynamo.frontend"
-    assert frontend.arguments[-1] == "--enable-engine-apis"
+    assert frontend.arguments[-1] == "--router-reset-states"
     assert frontend.environment()["DYN_ENABLE_RL"] == "1"
+    assert frontend.environment()["DYN_VLLM_ENABLE_INFERENCE_V1_GENERATE"] == "1"
     assert prefill.module == "dynamo.vllm"
     assert prefill.arguments[-3:] == ("--disaggregation-mode", "prefill", "--enable-rl")
     assert prefill.environment()["ROLE"] == "prefill"

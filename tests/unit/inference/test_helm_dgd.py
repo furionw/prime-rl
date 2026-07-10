@@ -110,3 +110,58 @@ def test_dgd_rejects_image_without_commit_suffixes(tmp_path: Path):
             image_digest=IMAGE_DIGEST,
             run_name="p4-run",
         )
+
+
+def test_dgd_runtime_overlay_allows_base_image_without_commit_suffixes(tmp_path: Path):
+    options = DynamoGraphRenderOptions(
+        release_name="p4-math",
+        namespace="bis-vllm",
+        image=f"nvcr.io/example/prime:toolchain@{IMAGE_DIGEST}",
+        output_dir=tmp_path,
+        prime_sha=PRIME_SHA,
+        dynamo_sha=DYNAMO_SHA,
+        image_digest=IMAGE_DIGEST,
+        run_name="p4-run",
+        runtime_overlay="/data/runtime/p4-run",
+    )
+
+    assert options.python_executable == "/data/runtime/p4-run/bin/python"
+
+
+def test_chart_reuses_storage_and_pins_workload_image_by_digest():
+    rendered = helm_template(
+        "--set",
+        "storage.existingClaim=shared-model-cache",
+        "--set",
+        "image.repository=nvcr.io/example/prime",
+        "--set",
+        f"image.digest={IMAGE_DIGEST}",
+        "--set",
+        "image.pullSecrets[0].name=ngc-pull-secret",
+        "--set",
+        "trainer.nodeSelector.kubernetes\\.io/hostname=gb200-node",
+    )
+
+    assert "kind: PersistentVolumeClaim" not in rendered
+    assert "claimName: shared-model-cache" in rendered
+    assert f'image: "nvcr.io/example/prime@{IMAGE_DIGEST}"' in rendered
+    assert "name: ngc-pull-secret" in rendered
+    assert "kubernetes.io/hostname: gb200-node" in rendered
+
+
+def test_native_chart_can_mount_memory_backed_shared_memory():
+    rendered = helm_template(
+        "--set",
+        "inference.sharedMemory.enabled=true",
+        "--set",
+        "inference.sharedMemory.sizeLimit=4Gi",
+        "--set",
+        "trainer.sharedMemory.enabled=true",
+        "--set",
+        "trainer.sharedMemory.sizeLimit=2Gi",
+    )
+
+    assert rendered.count("mountPath: /dev/shm") == 2
+    assert rendered.count("medium: Memory") == 2
+    assert "sizeLimit: 4Gi" in rendered
+    assert "sizeLimit: 2Gi" in rendered

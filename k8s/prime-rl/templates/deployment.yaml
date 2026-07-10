@@ -26,9 +26,13 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
       - name: prime-rl-orchestrator
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        image: {{ include "prime-rl.image" . | quote }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         {{- if .Values.orchestrator.autoStart }}
         command: ["/bin/bash", "-c"]
@@ -95,7 +99,7 @@ spec:
       volumes:
       - name: shared-data
         persistentVolumeClaim:
-          claimName: {{ .Release.Name }}-shared-data
+          claimName: {{ include "prime-rl.storageClaimName" . }}
       {{- end }}
 {{- end }}
 ---
@@ -127,9 +131,17 @@ spec:
       {{- if .Values.inference.runtimeClassName }}
       runtimeClassName: {{ .Values.inference.runtimeClassName }}
       {{- end }}
+      {{- with .Values.inference.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
       - name: prime-rl-inference
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        image: {{ include "prime-rl.image" . | quote }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         {{- if .Values.inference.autoStart }}
         command: ["/bin/bash", "-c"]
@@ -215,16 +227,30 @@ spec:
           failureThreshold: {{ .Values.inference.probes.readiness.failureThreshold }}
           timeoutSeconds: {{ .Values.inference.probes.readiness.timeoutSeconds }}
         {{- end }}
-        {{- if .Values.storage.enabled }}
+        {{- if or .Values.storage.enabled .Values.inference.sharedMemory.enabled }}
         volumeMounts:
+        {{- if .Values.storage.enabled }}
         - name: shared-data
           mountPath: {{ .Values.storage.mountPath }}
         {{- end }}
-      {{- if .Values.storage.enabled }}
+        {{- if .Values.inference.sharedMemory.enabled }}
+        - name: shared-memory
+          mountPath: /dev/shm
+        {{- end }}
+        {{- end }}
+      {{- if or .Values.storage.enabled .Values.inference.sharedMemory.enabled }}
       volumes:
+      {{- if .Values.storage.enabled }}
       - name: shared-data
         persistentVolumeClaim:
-          claimName: {{ .Release.Name }}-shared-data
+          claimName: {{ include "prime-rl.storageClaimName" . }}
+      {{- end }}
+      {{- if .Values.inference.sharedMemory.enabled }}
+      - name: shared-memory
+        emptyDir:
+          medium: Memory
+          sizeLimit: {{ .Values.inference.sharedMemory.sizeLimit }}
+      {{- end }}
       {{- end }}
 {{- end }}
 ---
@@ -256,9 +282,17 @@ spec:
       {{- if .Values.trainer.runtimeClassName }}
       runtimeClassName: {{ .Values.trainer.runtimeClassName }}
       {{- end }}
+      {{- with .Values.trainer.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
       - name: prime-rl-trainer
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        image: {{ include "prime-rl.image" . | quote }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         {{- if .Values.trainer.autoStart }}
         command: ["/bin/bash", "-c"]
@@ -356,15 +390,29 @@ spec:
           failureThreshold: {{ .Values.trainer.probes.readiness.failureThreshold }}
           timeoutSeconds: {{ .Values.trainer.probes.readiness.timeoutSeconds }}
         {{- end }}
-        {{- if .Values.storage.enabled }}
+        {{- if or .Values.storage.enabled .Values.trainer.sharedMemory.enabled }}
         volumeMounts:
+        {{- if .Values.storage.enabled }}
         - name: shared-data
           mountPath: {{ .Values.storage.mountPath }}
         {{- end }}
-      {{- if .Values.storage.enabled }}
+        {{- if .Values.trainer.sharedMemory.enabled }}
+        - name: shared-memory
+          mountPath: /dev/shm
+        {{- end }}
+        {{- end }}
+      {{- if or .Values.storage.enabled .Values.trainer.sharedMemory.enabled }}
       volumes:
+      {{- if .Values.storage.enabled }}
       - name: shared-data
         persistentVolumeClaim:
-          claimName: {{ .Release.Name }}-shared-data
+          claimName: {{ include "prime-rl.storageClaimName" . }}
+      {{- end }}
+      {{- if .Values.trainer.sharedMemory.enabled }}
+      - name: shared-memory
+        emptyDir:
+          medium: Memory
+          sizeLimit: {{ .Values.trainer.sharedMemory.sizeLimit }}
+      {{- end }}
       {{- end }}
 {{- end }}

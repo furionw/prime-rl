@@ -1,0 +1,164 @@
+namespace: ${NAMESPACE}
+
+image:
+  repository: nvcr.io/nvstaging/ai-dynamo/vllm-runtime
+  digest: ${IMAGE_DIGEST}
+  pullPolicy: IfNotPresent
+  pullSecrets:
+    - name: ngc-pull-secret
+
+storage:
+  enabled: true
+  existingClaim: shared-model-cache
+  mountPath: /data
+
+orchestrator:
+  enabled: true
+  replicas: 1
+  autoStart: true
+  command: >-
+    until curl -fsS http://${RELEASE_NAME}-inference-0.${RELEASE_NAME}-inference-headless.${NAMESPACE}.svc.cluster.local:8000/health; do sleep 10; done;
+    set +e;
+    ${RUN_ROOT}/runtime/bin/orchestrator
+    @ ${RUN_ROOT}/render/${STAGE}/configs/orchestrator.toml
+    --model.client.base-url "$INFERENCE_URL"
+    --weight-broadcast.host ${RELEASE_NAME}-trainer.${NAMESPACE}.svc.cluster.local;
+    rc=$?;
+    echo "RL_ORCHESTRATOR_EXIT=${rc}";
+    sleep infinity
+  resources:
+    requests:
+      memory: "32Gi"
+      cpu: "8"
+  nodeSelector:
+    kubernetes.io/hostname: ${NODE_NAME}
+  env:
+    - name: HF_HOME
+      value: /data
+    - name: HF_HUB_OFFLINE
+      value: "1"
+    - name: UV_CACHE_DIR
+      value: ${RUN_ROOT}/uv-cache
+    - name: PRIME_LOG_LEVEL
+      value: debug
+
+inference:
+  enabled: true
+  mode: statefulset
+  replicas: 1
+  autoStart: true
+  command: >-
+    set +e;
+    ${RUN_ROOT}/runtime/bin/inference
+    @ ${RUN_ROOT}/render/${STAGE}/inference-local.toml
+    --output-dir ${RUN_ROOT}/outputs/${STAGE};
+    rc=$?;
+    echo "RL_INFERENCE_EXIT=${rc}";
+    sleep infinity
+  runtimeClassName: ""
+  gpu:
+    enabled: true
+    count: 2
+  resources:
+    requests:
+      memory: "256Gi"
+      cpu: "24"
+  sharedMemory:
+    enabled: true
+    sizeLimit: 4Gi
+  nodeSelector:
+    kubernetes.io/hostname: ${NODE_NAME}
+  env:
+    - name: HF_HOME
+      value: /data
+    - name: HF_HUB_OFFLINE
+      value: "1"
+    - name: NCCL_SOCKET_IFNAME
+      value: eth0
+    - name: NCCL_SOCKET_FAMILY
+      value: AF_INET
+    - name: NCCL_IB_DISABLE
+      value: "1"
+    - name: NCCL_NET
+      value: Socket
+    - name: NCCL_MNNVL_ENABLE
+      value: "0"
+    - name: NCCL_DEBUG
+      value: INFO
+    - name: NCCL_DEBUG_SUBSYS
+      value: INIT,NET
+    - name: GLOO_SOCKET_IFNAME
+      value: eth0
+    - name: NIXL_PLUGIN_DIR
+      value: ${RUN_ROOT}/runtime/lib/python3.12/site-packages/.nixl_cu13.mesonpy.libs/plugins
+    - name: UCX_MODULE_DIR
+      value: ${RUN_ROOT}/runtime/lib/python3.12/site-packages/nixl_cu13.libs/ucx
+    - name: PRIME_LOG_LEVEL
+      value: debug
+
+trainer:
+  enabled: true
+  replicas: 1
+  autoStart: true
+  command: >-
+    set +e;
+    ${RUN_ROOT}/runtime/bin/trainer
+    @ ${RUN_ROOT}/render/${STAGE}/configs/trainer.toml
+    --output-dir ${RUN_ROOT}/outputs/${STAGE}
+    --weight-broadcast.host "$POD_IP";
+    rc=$?;
+    echo "RL_TRAINER_EXIT=${rc}";
+    sleep infinity
+  runtimeClassName: ""
+  gpu:
+    enabled: true
+    count: 1
+  resources:
+    requests:
+      memory: "256Gi"
+      cpu: "24"
+  sharedMemory:
+    enabled: true
+    sizeLimit: 4Gi
+  nodeSelector:
+    kubernetes.io/hostname: ${TRAINER_NODE_NAME}
+  env:
+    - name: HF_HOME
+      value: /data
+    - name: HF_HUB_OFFLINE
+      value: "1"
+    - name: NCCL_SOCKET_IFNAME
+      value: eth0
+    - name: NCCL_SOCKET_FAMILY
+      value: AF_INET
+    - name: NCCL_IB_DISABLE
+      value: "1"
+    - name: NCCL_NET
+      value: Socket
+    - name: NCCL_MNNVL_ENABLE
+      value: "0"
+    - name: NCCL_DEBUG
+      value: INFO
+    - name: NCCL_DEBUG_SUBSYS
+      value: INIT,NET
+    - name: GLOO_SOCKET_IFNAME
+      value: eth0
+    - name: RANK
+      value: "0"
+    - name: WORLD_SIZE
+      value: "1"
+    - name: LOCAL_RANK
+      value: "0"
+    - name: LOCAL_WORLD_SIZE
+      value: "1"
+    - name: MASTER_ADDR
+      value: 127.0.0.1
+    - name: MASTER_PORT
+      value: "29500"
+    - name: PRIME_LOG_LEVEL
+      value: debug
+
+config:
+  example: multimodal-dynamo
+  secrets:
+    enabled: false

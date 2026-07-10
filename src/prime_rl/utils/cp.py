@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-# ruff: noqa: I001 — `prime_rl._compat` must run before `ring_flash_attn` imports below.
+# ruff: noqa: I001 — `prime_rl._compat` must run before lazy `ring_flash_attn` imports below.
 import prime_rl._compat  # noqa: F401
 
 from typing import Literal
@@ -9,7 +9,6 @@ import torch
 import torch.distributed as dist
 import torch.distributed.nn as dist_nn
 import torch.nn as nn
-from ring_flash_attn import update_ring_flash_attn_params
 
 from prime_rl.utils.sequence import get_cu_seqlens_from_position_ids
 
@@ -177,6 +176,8 @@ def setup_cp_params(
     cu_seqlens, max_seqlen = get_cu_seqlens_from_position_ids(position_ids)
 
     if cp_style == "ring":
+        from ring_flash_attn import update_ring_flash_attn_params
+
         update_ring_flash_attn_params(cu_seqlens, cp_group)
     elif cp_style == "ulysses":
         # Delayed import: ulysses_attn lives under trainer.models, which imports
