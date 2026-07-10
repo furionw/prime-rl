@@ -42,7 +42,7 @@ spec:
           RUN_OUTPUT="${RUN_ROOT}/outputs/${STAGE}"
           export VIRTUAL_ENV="${OVERLAY}"
           export PATH="${OVERLAY}/bin:${PATH}"
-          rm -rf "${OUTPUT}"
+          rm -rf "${OUTPUT}" "${RUN_OUTPUT}"
           mkdir -p "${OUTPUT}/configs" "${RUN_OUTPUT}"
 
           python - <<'PY'

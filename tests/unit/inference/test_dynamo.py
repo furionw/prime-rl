@@ -35,10 +35,23 @@ def disaggregated_config(**overrides) -> InferenceConfig:
     return InferenceConfig.model_validate(data)
 
 
-@pytest.mark.parametrize("stage", ["smoke", "learn"])
-def test_dense_multimodal_recipe_disables_expert_parallel(stage: str):
+@pytest.mark.parametrize(
+    ("stage", "model_name"),
+    [
+        ("smoke", "Qwen/Qwen3-VL-2B-Instruct"),
+        ("qwen35", "Qwen/Qwen3.5-2B"),
+        ("learn", "Qwen/Qwen3-VL-4B-Instruct"),
+    ],
+)
+def test_dense_multimodal_recipe_uses_expected_model_and_disables_expert_parallel(stage: str, model_name: str):
     config = tomllib.loads((RECIPE / f"rl-{stage}.toml").read_text())
+    assert config["model"]["name"] == model_name
     assert config["inference"]["enable_expert_parallel"] is False
+
+
+def test_multimodal_recipe_clears_stage_output_before_rendering():
+    render_pod = (RECIPE / "render-pod.yaml").read_text()
+    assert 'rm -rf "${OUTPUT}" "${RUN_OUTPUT}"' in render_pod
 
 
 def test_multimodal_recipe_overrides_nested_orchestrator_client():

@@ -16,6 +16,8 @@ BASE_IMAGE="${BASE_IMAGE:-nvcr.io/nvstaging/ai-dynamo/vllm-runtime:qiwa-dev-vllm
 LOCAL_LOG_ROOT="${LOCAL_LOG_ROOT:-${HOME}/workspace/dynamo-tmp/logs/07-09/multimodal-rl-k8s/${RUN_ID}}"
 K=(kubectl --context "${KUBE_CONTEXT}" -n "${NAMESPACE}")
 K_ALL=(kubectl --context "${KUBE_CONTEXT}")
+NODE_NAME_EXPLICIT="${NODE_NAME+x}"
+TRAINER_NODE_NAME_EXPLICIT="${TRAINER_NODE_NAME+x}"
 
 select_node() {
   local max_used="$1"
@@ -99,41 +101,30 @@ NODE_NAME="${NODE_NAME:-$(select_node 2)}"
 TRAINER_NODE_NAME="${TRAINER_NODE_NAME:-$(select_node 3 "${NODE_NAME}")}"
 BUILD_JOB="prime-mm-build-${RUN_SLUG}"
 BUILD_JOB="${BUILD_JOB//[^a-z0-9-]/-}"
-PREWARM_INFERENCE_POD="prime-mm-prewarm-inference-${RUN_SLUG}"
-PREWARM_INFERENCE_POD="${PREWARM_INFERENCE_POD//[^a-z0-9-]/-}"
-PREWARM_TRAINER_POD="prime-mm-prewarm-trainer-${RUN_SLUG}"
-PREWARM_TRAINER_POD="${PREWARM_TRAINER_POD//[^a-z0-9-]/-}"
 
-export NAMESPACE RUN_ID RUN_ROOT DYNAMO_REF PRIME_REPO PRIME_REF IMAGE_DIGEST BASE_IMAGE NODE_NAME TRAINER_NODE_NAME BUILD_JOB PREWARM_INFERENCE_POD PREWARM_TRAINER_POD
+export NAMESPACE RUN_ID RUN_ROOT DYNAMO_REF PRIME_REPO PRIME_REF IMAGE_DIGEST BASE_IMAGE NODE_NAME TRAINER_NODE_NAME BUILD_JOB
 
 apply_template() {
   local template="$1"
-  local vars='$NAMESPACE $RUN_ID $RUN_ROOT $DYNAMO_REF $PRIME_REPO $PRIME_REF $IMAGE_DIGEST $BASE_IMAGE $NODE_NAME $TRAINER_NODE_NAME $BUILD_JOB $PREWARM_POD $PREWARM_NODE $RENDER_POD $STAGE $RELEASE_NAME $DOWNLOAD_POD $MODEL_NAME'
+  local vars='$NAMESPACE $RUN_ID $RUN_ROOT $DYNAMO_REF $PRIME_REPO $PRIME_REF $IMAGE_DIGEST $BASE_IMAGE $NODE_NAME $TRAINER_NODE_NAME $BUILD_JOB $RENDER_POD $STAGE $RELEASE_NAME $DOWNLOAD_POD $MODEL_NAME'
   envsubst "${vars}" < "${template}" | "${K_ALL[@]}" apply -f -
 }
 
-start_image_prewarm() {
-  PREWARM_POD="${PREWARM_INFERENCE_POD}"
-  PREWARM_NODE="${NODE_NAME}"
-  export PREWARM_POD PREWARM_NODE
-  "${K[@]}" delete pod "${PREWARM_POD}" --ignore-not-found --wait=true
-  apply_template "${HERE}/prewarm-pod.yaml"
-
-  PREWARM_POD="${PREWARM_TRAINER_POD}"
-  PREWARM_NODE="${TRAINER_NODE_NAME}"
-  export PREWARM_POD PREWARM_NODE
-  "${K[@]}" delete pod "${PREWARM_POD}" --ignore-not-found --wait=true
-  apply_template "${HERE}/prewarm-pod.yaml"
+write_run_env() {
+  printf 'run_id=%s\ninference_node=%s\ntrainer_node=%s\nrun_root=%s\n' \
+    "${RUN_ID}" "${NODE_NAME}" "${TRAINER_NODE_NAME}" "${RUN_ROOT}" |
+    tee "${LOCAL_LOG_ROOT}/run.env"
 }
 
-finish_image_prewarm() {
-  for pod in "${PREWARM_INFERENCE_POD}" "${PREWARM_TRAINER_POD}"; do
-    if ! "${K[@]}" wait --for=jsonpath='{.status.phase}'=Succeeded "pod/${pod}" --timeout=600s; then
-      "${K[@]}" describe pod "${pod}" >&2 || true
-      return 1
-    fi
-    "${K[@]}" delete pod "${pod}" --wait=false >/dev/null
-  done
+refresh_auto_selected_nodes() {
+  if [[ -z "${NODE_NAME_EXPLICIT}" ]]; then
+    NODE_NAME="$(select_node 2)"
+  fi
+  if [[ -z "${TRAINER_NODE_NAME_EXPLICIT}" ]]; then
+    TRAINER_NODE_NAME="$(select_node 3 "${NODE_NAME}")"
+  fi
+  export NODE_NAME TRAINER_NODE_NAME
+  write_run_env
 }
 
 preflight() {
@@ -143,9 +134,7 @@ preflight() {
   "${K_ALL[@]}" get node "${NODE_NAME}" >/dev/null
   "${K_ALL[@]}" get node "${TRAINER_NODE_NAME}" >/dev/null
   mkdir -p "${LOCAL_LOG_ROOT}"
-  printf 'run_id=%s\ninference_node=%s\ntrainer_node=%s\nrun_root=%s\n' \
-    "${RUN_ID}" "${NODE_NAME}" "${TRAINER_NODE_NAME}" "${RUN_ROOT}" |
-    tee "${LOCAL_LOG_ROOT}/run.env"
+  write_run_env
 }
 
 build_overlay() {
@@ -173,6 +162,7 @@ build_overlay() {
 model_for_stage() {
   case "$1" in
     smoke) echo "Qwen/Qwen3-VL-2B-Instruct" ;;
+    qwen35) echo "Qwen/Qwen3.5-2B" ;;
     learn) echo "Qwen/Qwen3-VL-4B-Instruct" ;;
     *) echo "Unknown stage: $1" >&2; return 2 ;;
   esac
@@ -237,6 +227,7 @@ render_stage() {
   "${K[@]}" logs "${RENDER_POD}" | tee "${out}/render.log"
   rm -rf "${out}/render"
   "${K[@]}" cp "${RENDER_POD}:${RUN_ROOT}/render/${stage}" "${out}/render"
+  refresh_auto_selected_nodes
   envsubst '$NAMESPACE $IMAGE_DIGEST $RUN_ROOT $STAGE $RELEASE_NAME $NODE_NAME $TRAINER_NODE_NAME' \
     < "${HERE}/values.yaml" > "${out}/values.yaml"
   "${K[@]}" delete pod "${RENDER_POD}" --wait=false >/dev/null
@@ -363,10 +354,9 @@ run_stage() {
 
 all() {
   preflight
-  start_image_prewarm
   build_overlay
-  finish_image_prewarm
   run_stage smoke
+  run_stage qwen35
   run_stage learn
   "${K[@]}" delete job "${BUILD_JOB}" --ignore-not-found --wait=false
 }
@@ -374,9 +364,10 @@ all() {
 case "${1:-all}" in
   preflight) preflight ;;
   build) preflight; build_overlay ;;
-  smoke) preflight; start_image_prewarm; finish_image_prewarm; run_stage smoke ;;
-  learn) preflight; start_image_prewarm; finish_image_prewarm; run_stage learn ;;
-  clean) clean_stage smoke; clean_stage learn ;;
+  smoke) preflight; run_stage smoke ;;
+  qwen35) preflight; run_stage qwen35 ;;
+  learn) preflight; run_stage learn ;;
+  clean) clean_stage smoke; clean_stage qwen35; clean_stage learn ;;
   all) all ;;
-  *) echo "usage: $0 {preflight|build|smoke|learn|clean|all}" >&2; exit 2 ;;
+  *) echo "usage: $0 {preflight|build|smoke|qwen35|learn|clean|all}" >&2; exit 2 ;;
 esac
