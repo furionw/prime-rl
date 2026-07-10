@@ -136,7 +136,9 @@ spec:
                 python -c "from nixl._api import nixl_agent; assert 'UCX' in nixl_agent('build-check').get_plugin_list(); print('NIXL UCX plugin OK')"
 
               cd "${DYNAMO_SRC}"
-              python -m pytest -q components/src/dynamo/vllm/tests/test_vllm_engine_generate.py
+              python -m pytest -q \
+                components/src/dynamo/vllm/tests/test_vllm_engine_generate.py \
+                components/src/dynamo/vllm/tests/test_runtime_metadata.py
 
               cd "${PRIME_SRC}"
               python -m pytest -q \
