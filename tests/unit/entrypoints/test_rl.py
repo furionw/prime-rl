@@ -97,6 +97,11 @@ def test_multi_node_dynamo_slurm_script_launches_frontend_and_node_worker(tmp_pa
     assert "PRIME_RL_DYNAMO_PROCESS=frontend" in script
     assert "PRIME_RL_DYNAMO_PROCESS=worker" in script
     assert 'ADMIN_URLS="$INFER_URLS"' in script
+    assert "export RL_TRAIN_DONE_FILE=" in script
+    assert "export RL_ORCH_DONE_FILE=" in script
+    assert 'touch "$RL_TRAIN_DONE_FILE"' in script
+    assert 'touch "$RL_ORCH_DONE_FILE"' in script
+    assert '[ -f "$RL_DONE_FILE" ]' in script
     assert "launch_inference_rank" not in script
 
 

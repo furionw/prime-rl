@@ -75,8 +75,11 @@ export DYN_EVENT_PLANE=zmq
 export DYN_FILE_KV=$OUTPUT_DIR/dynamo/discovery-$SLURM_JOB_ID
 export DYN_FILE_KV_TTL_SECS=1800
 export DYN_NAMESPACE=prime-rl-$SLURM_JOB_ID
+export RL_TRAIN_DONE_FILE=$OUTPUT_DIR/dynamo/train-done-$SLURM_JOB_ID
+export RL_ORCH_DONE_FILE=$OUTPUT_DIR/dynamo/orchestrator-done-$SLURM_JOB_ID
+export RL_DONE_FILE=$OUTPUT_DIR/dynamo/rl-done-$SLURM_JOB_ID
 mkdir -p $OUTPUT_DIR/dynamo
-rm -f $DYN_FILE_KV
+rm -f $DYN_FILE_KV $RL_TRAIN_DONE_FILE $RL_ORCH_DONE_FILE $RL_DONE_FILE
 {% endif %}
 
 export WANDB_SHARED_MODE=1
@@ -450,7 +453,9 @@ else
 
     echo $HOSTNAMES_STR | tee $OUTPUT_DIR/logs/trainer/node_${TRAIN_NODE_RANK}.log
 
-    WANDB_SHARED_LABEL=trainer uv run torchrun \
+{% if is_dynamo %}    (
+    set -o pipefail
+{% endif %}    WANDB_SHARED_LABEL=trainer uv run torchrun \
         --role=trainer \
         --nnodes=$NUM_TRAIN_NODES \
         --nproc-per-node=$GPUS_PER_NODE \
@@ -463,7 +468,15 @@ else
         --local-ranks-filter={{ ranks_filter }} \
         -m prime_rl.trainer.rl.train \
         @ $CONFIG_DIR/trainer.toml \
-        2>&1 | sed -u 's/^\[[a-zA-Z]*[0-9]*\]://' | tee -a $OUTPUT_DIR/logs/trainer/node_${TRAIN_NODE_RANK}.log &
+        2>&1 | sed -u 's/^\[[a-zA-Z]*[0-9]*\]://' | tee -a $OUTPUT_DIR/logs/trainer/node_${TRAIN_NODE_RANK}.log
+{% if is_dynamo %}    TRAINER_EXIT=$?
+    if [ "$TRAINER_EXIT" -eq 0 ] && [ "$TRAIN_NODE_RANK" -eq 0 ]; then
+        touch "$RL_TRAIN_DONE_FILE"
+    fi
+    exit $TRAINER_EXIT
+    ) &
+{% else %}    &
+{% endif %}
 {% if num_infer_nodes > 0 %}    fi{% endif %}
 {% if num_infer_nodes > 0 %}
 # Launch the orchestrator on one node. Default is trainer rank 0 (SLURM_PROCID ==
@@ -482,17 +495,49 @@ if [ "$SLURM_PROCID" -eq "$ORCH_PROCID" ]; then
 {%- endfor %}
 {%- endif %}
     {% if use_nccl_broadcast %}ORCHESTRATOR_ARGS="$ORCHESTRATOR_ARGS --weight_broadcast.host $MASTER_ADDR"
+    {% endif %}{% if is_dynamo %}(
+        set -o pipefail
     {% endif %}WANDB_SHARED_LABEL=orchestrator uv run orchestrator $ORCHESTRATOR_ARGS \
-        2>&1 | tee $OUTPUT_DIR/logs/orchestrator.log &
+        2>&1 | tee $OUTPUT_DIR/logs/orchestrator.log
+{% if is_dynamo %}        ORCHESTRATOR_EXIT=$?
+        if [ "$ORCHESTRATOR_EXIT" -eq 0 ]; then
+            touch "$RL_ORCH_DONE_FILE"
+        fi
+        exit $ORCHESTRATOR_EXIT
+    ) &
+{% else %}    &
+{% endif %}
 fi
 {% endif %}
 
+{% if is_dynamo %}
+# Dynamo frontends and workers are long-lived services, so a clean trainer
+# exit alone cannot finish the allocation. Every node observes the two shared
+# completion markers; the first non-zero local child still tears down the
+# allocation through --kill-on-bad-exit=1.
+(
+    while [ ! -f "$RL_TRAIN_DONE_FILE" ] || [ ! -f "$RL_ORCH_DONE_FILE" ]; do
+        sleep 1
+    done
+    touch "$RL_DONE_FILE"
+) &
+
+EXIT_CODE=0
+while true; do
+    wait -n
+    EXIT_CODE=$?
+    if [ "$EXIT_CODE" -ne 0 ] || [ -f "$RL_DONE_FILE" ]; then
+        break
+    fi
+done
+{% else %}
 # Wait for the first background job to exit and propagate its exit code. This
 # turns background process crashes (router, orchestrator) into task failures
 # that --kill-on-bad-exit=1 can broadcast to the other nodes so the whole job
 # tears down instead of leaving zombies holding the allocation.
 wait -n
 EXIT_CODE=$?
+{% endif %}
 REMAINING_PIDS=$(jobs -p)
 {%- if cleanup_grace_period %}
 # Cross-node teardown is driven by `srun --kill-on-bad-exit=1`, which reaps peer
