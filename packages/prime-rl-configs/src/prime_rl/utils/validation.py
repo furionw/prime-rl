@@ -131,11 +131,10 @@ def propagate_shared_fields(data: Any) -> Any:
     # the same SLURM allocation, so the nested inference inherits [slurm]. This is
     # what lets the nested InferenceConfig's multi-node / disaggregated SLURM check
     # pass (the per-rank inference.toml drops slurm, so each rank still runs locally).
-    # A single-node Dynamo job instead enters the local RL launcher inside its
-    # allocation, where the existing local Dynamo supervisor owns the topology.
-    deployment_type = get("deployment.type") or "single_node"
-    is_single_node_dynamo = deployment_type == "single_node" and get("inference.backend.type") == "dynamo"
-    if not is_single_node_dynamo:
+    # Dynamo is owned by the parent RL launcher for both single-node and
+    # multi-node jobs. Propagating [slurm] would make the child inference
+    # config try to submit another job instead of entering that launcher.
+    if get("inference.backend.type") != "dynamo":
         propagate("slurm", "inference.slurm")
 
     # output_dir: orchestrator gets a ``/run_default`` subdir so trainer +

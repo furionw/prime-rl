@@ -323,6 +323,28 @@ def test_aggregated_worker_uses_canonical_component_name(tmp_path: Path):
     assert build_worker_environment(spec, {})["DYN_COMPONENT"] == "backend"
 
 
+def test_distributed_worker_uses_node_gpu_and_shared_namespace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    config = InferenceConfig.model_validate(
+        {
+            "backend": {"type": "dynamo"},
+            "deployment": {"type": "multi_node", "num_nodes": 2, "gpus_per_node": 1},
+            "output_dir": str(tmp_path),
+        }
+    )
+    captured = []
+    monkeypatch.setenv("DYN_NAMESPACE", "prime-slurm-test")
+    monkeypatch.setattr(dynamo, "_visible_gpu_ids", lambda: ["0"])
+    monkeypatch.setattr(dynamo, "_exec_process", lambda process, environment: captured.append((process, environment)))
+
+    dynamo.run_dynamo_worker(config, "agg", worker_index=1, nixl_host="10.0.0.2")
+
+    process, environment = captured[0]
+    assert process.module == "dynamo.vllm"
+    assert environment["CUDA_VISIBLE_DEVICES"] == "0"
+    assert environment["DYN_NAMESPACE"] == "prime-slurm-test"
+    assert environment["VLLM_NIXL_SIDE_CHANNEL_HOST"] == "10.0.0.2"
+
+
 def test_dynamo_dry_run_uses_symbolic_gpu_slots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     config = disaggregated_config(output_dir=tmp_path, dry_run=True)
     captured_gpu_ids = []

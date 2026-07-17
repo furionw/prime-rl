@@ -170,9 +170,9 @@ def inference_local(config: InferenceConfig):
     setup_vllm_env(config)
 
     if config.backend.type == "dynamo":
-        from prime_rl.inference.dynamo import run_dynamo_local
+        from prime_rl.inference.dynamo import run_dynamo
 
-        run_dynamo_local(config)
+        run_dynamo(config)
         return
 
     from prime_rl.inference.vllm.server import server  # pyright: ignore

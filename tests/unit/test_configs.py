@@ -447,20 +447,79 @@ def test_single_node_dynamo_rl_slurm_uses_local_inference_launcher(
     assert config.inference.slurm is None
 
 
-def test_multi_node_dynamo_rl_slurm_stays_rejected():
-    with pytest.raises(ValidationError, match="not Prime's SLURM template"):
+def test_multi_node_dynamo_rl_slurm_uses_parent_launcher():
+    config = RLConfig.model_validate(
+        {
+            "trainer": {},
+            "orchestrator": {},
+            "inference": {"backend": {"type": "dynamo"}},
+            "deployment": {
+                "type": "multi_node",
+                "gpus_per_node": 1,
+                "num_train_nodes": 1,
+                "num_infer_nodes": 1,
+            },
+            "slurm": {},
+        }
+    )
+
+    assert config.inference is not None
+    assert config.inference.slurm is None
+    assert config.orchestrator.model.client.dynamo_worker_roles == ("agg",)
+    assert config.orchestrator.model.client.dynamo_gpus_per_worker == 1
+
+
+def test_multi_node_dynamo_inference_derives_one_worker_per_node():
+    config = RLConfig.model_validate(
+        {
+            "trainer": {},
+            "orchestrator": {},
+            "inference": {
+                "backend": {"type": "dynamo"},
+                "deployment": {"type": "multi_node", "num_nodes": 2, "gpus_per_node": 1},
+            },
+            "deployment": {
+                "type": "multi_node",
+                "gpus_per_node": 1,
+                "num_train_nodes": 1,
+                "num_infer_nodes": 2,
+            },
+            "slurm": {},
+        }
+    )
+
+    assert config.inference is not None
+    assert config.inference.dynamo_worker_roles == ("agg", "agg")
+    assert config.inference.dynamo_gpus_per_worker == 1
+    assert config.orchestrator.model.client.dynamo_worker_roles == ("agg", "agg")
+    assert config.trainer.weight_broadcast.inference_world_size == 2
+
+
+@pytest.mark.parametrize(
+    ("deployment_override", "slurm_override", "message"),
+    [
+        ({"num_infer_replicas": 2}, {}, "one logical inference pool"),
+        ({}, {"shared_fs": False}, "shared_fs"),
+    ],
+)
+def test_multi_node_dynamo_rejects_unsupported_pool_shapes(
+    deployment_override: dict, slurm_override: dict, message: str
+):
+    deployment = {
+        "type": "multi_node",
+        "gpus_per_node": 1,
+        "num_train_nodes": 1,
+        "num_infer_nodes": 1,
+        **deployment_override,
+    }
+    with pytest.raises(ValidationError, match=message):
         RLConfig.model_validate(
             {
                 "trainer": {},
                 "orchestrator": {},
                 "inference": {"backend": {"type": "dynamo"}},
-                "deployment": {
-                    "type": "multi_node",
-                    "gpus_per_node": 1,
-                    "num_train_nodes": 1,
-                    "num_infer_nodes": 1,
-                },
-                "slurm": {},
+                "deployment": deployment,
+                "slurm": slurm_override,
             }
         )
 

@@ -32,7 +32,11 @@ export NODES_PER_INFER_REPLICA={{ nodes_per_infer_replica }}
 export NUM_INFER_REPLICAS={{ num_infer_replicas }}
 export GPUS_PER_NODE={{ gpus_per_node }}
 {% if num_infer_nodes > 0 -%}
+{% if is_dynamo -%}
+export DYNAMO_FRONTEND_PORT={{ frontend_port }}
+{%- else %}
 export ROUTER_PORT={{ router.port }}
+{%- endif %}
 export INFERENCE_TP={{ inference_tp }}
 export INFERENCE_DP_LOCAL=$((GPUS_PER_NODE / INFERENCE_TP))
 export INFERENCE_DATA_PARALLEL_RPC_PORT={{ inference_data_parallel_rpc_port }}
@@ -63,6 +67,17 @@ mkdir -p $OUTPUT_DIR/logs/trainer $OUTPUT_DIR/logs/inference
 rm -f $OUTPUT_DIR/logs/inference/*.log
 ln -sfn trainer/node_0.log $OUTPUT_DIR/logs/trainer.log
 ln -sfn inference/node_0.log $OUTPUT_DIR/logs/inference.log
+{% if is_dynamo %}
+# The shared file backend lets one frontend and workers on every inference
+# node join the same Dynamo namespace without an external discovery service.
+export DYN_DISCOVERY_BACKEND=file
+export DYN_EVENT_PLANE=zmq
+export DYN_FILE_KV=$OUTPUT_DIR/dynamo/discovery-$SLURM_JOB_ID
+export DYN_FILE_KV_TTL_SECS=1800
+export DYN_NAMESPACE=prime-rl-$SLURM_JOB_ID
+mkdir -p $OUTPUT_DIR/dynamo
+rm -f $DYN_FILE_KV
+{% endif %}
 
 export WANDB_SHARED_MODE=1
 export WANDB_SHARED_RUN_ID=${WANDB_SHARED_RUN_ID:-$(python3 -c "import uuid; print(uuid.uuid4().hex)")}
@@ -79,7 +94,11 @@ INFER_HOSTS=( ${HOSTNAMES[@]:0:$NUM_INFER_NODES} )
 INFER_URLS=""
 ADMIN_URLS=""
 ALL_ROUTER_ARGS=""
-{% if is_disaggregated -%}
+{% if is_dynamo -%}
+DYNAMO_FRONTEND_HOST="${INFER_HOSTS[0]}"
+INFER_URLS="http://${DYNAMO_FRONTEND_HOST}:${DYNAMO_FRONTEND_PORT}/v1"
+ADMIN_URLS="$INFER_URLS"
+{%- elif is_disaggregated -%}
 for ((r=0; r<NUM_INFER_REPLICAS; r++)); do
     replica_base=$((r * NODES_PER_INFER_REPLICA))
     router_host="${INFER_HOSTS[$replica_base]}"
@@ -177,6 +196,8 @@ srun bash -s <<'CLEANUP_SH'
     pkill -9 -f "[e]pp.*pool-name" 2>/dev/null
     pkill -9 -f "[e]nvoy.*envoy.yaml" 2>/dev/null
     pkill -9 -f "[p]d-sidecar" 2>/dev/null
+    pkill -9 -f "[d]ynamo.frontend" 2>/dev/null
+    pkill -9 -f "[d]ynamo.vllm" 2>/dev/null
     pkill -9 -f "[v]llm" 2>/dev/null
     pkill -9 -f "[p]rime_rl" 2>/dev/null
     # Also match prctl-set process names (kernel comm) like "vllm::router"
@@ -241,6 +262,43 @@ if [ "$SLURM_PROCID" -lt "$NUM_INFER_NODES" ]; then
         | tee $OUTPUT_DIR/logs/inference/node_${INFER_NODE_RANK}.log
 
     CONFIG_PATH="$CONFIG_DIR/inference.toml"
+{% if is_dynamo -%}
+    # One allocation-wide frontend discovers one independently administered
+    # worker per inference node. The worker index fixes discovery/admin order.
+    if [ "$INFER_NODE_RANK" -eq 0 ]; then
+        PRIME_RL_DYNAMO_PROCESS=frontend CUDA_VISIBLE_DEVICES="" \
+            uv run inference @ "$CONFIG_PATH" --output-dir "$OUTPUT_DIR" \
+            >> "$OUTPUT_DIR/logs/inference/frontend.log" 2>&1 &
+    fi
+
+{% if is_disaggregated -%}
+    rdma_ports() {
+        for port in /sys/class/infiniband/*/ports/*; do
+            [ "$(cat "$port/link_layer" 2>/dev/null)" = "$1" ] || continue
+            grep -q ACTIVE "$port/state" 2>/dev/null || continue
+            dev=${port%/ports/*}
+            echo "$(basename "$dev"):$(basename "$port")"
+        done | paste -sd,
+    }
+    UCX_NET_DEVICES=$(rdma_ports InfiniBand)
+    [ -n "$UCX_NET_DEVICES" ] || UCX_NET_DEVICES=$(rdma_ports Ethernet)
+    export UCX_NET_DEVICES=${UCX_NET_DEVICES:-all}
+    if [ "$INFER_NODE_RANK" -lt "$NUM_PREFILL_NODES" ]; then
+        DYNAMO_ROLE=prefill
+    else
+        DYNAMO_ROLE=decode
+    fi
+{%- else %}
+    DYNAMO_ROLE=agg
+{%- endif %}
+    export CUDA_VISIBLE_DEVICES=$(seq -s, 0 $((GPUS_PER_NODE - 1)))
+    PRIME_RL_DYNAMO_PROCESS=worker \
+    PRIME_RL_DYNAMO_ROLE=$DYNAMO_ROLE \
+    PRIME_RL_DYNAMO_WORKER_INDEX=$INFER_NODE_RANK \
+    PRIME_RL_DYNAMO_NIXL_HOST=$LOCAL_IP \
+        uv run inference @ "$CONFIG_PATH" --output-dir "$OUTPUT_DIR" \
+        >> "$OUTPUT_DIR/logs/inference/node_${INFER_NODE_RANK}.log" 2>&1 &
+{%- else %}
 {% include '_launch_rank.sh.j2' %}
 {% include '_launch_router.sh.j2' %}
 
@@ -376,6 +434,7 @@ if [ "$SLURM_PROCID" -lt "$NUM_INFER_NODES" ]; then
             launch_inference_rank "$((BACKEND_PORT + d))" "$RANK_GPUS" 1 "" "" "" "$RANK_LOG"
         fi
     done
+{%- endif %}
 {%- endif %}
 
 else

@@ -12,7 +12,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from prime_rl.configs.inference import DisaggregatedInferenceDeploymentConfig, InferenceConfig
 from prime_rl.utils.pathing import get_config_dir
@@ -61,6 +61,11 @@ _WORKER_COMPONENT = {
     "prefill": "prefill",
     "decode": "backend",
 }
+
+DISTRIBUTED_PROCESS_ENV = "PRIME_RL_DYNAMO_PROCESS"
+DISTRIBUTED_ROLE_ENV = "PRIME_RL_DYNAMO_ROLE"
+DISTRIBUTED_WORKER_INDEX_ENV = "PRIME_RL_DYNAMO_WORKER_INDEX"
+DISTRIBUTED_NIXL_HOST_ENV = "PRIME_RL_DYNAMO_NIXL_HOST"
 
 
 @dataclass(frozen=True)
@@ -413,35 +418,59 @@ def build_local_worker_specs(
         role_indexes[role] += 1
         start = worker_index * gpus_per_worker
         worker_gpus = tuple(available[start : start + gpus_per_worker])
-        ports = _allocate_local_worker_ports(worker_index)
-        kv_events_port = ports.kv_events if role in ("prefill", "agg") else None
-        name = f"{role}-{role_index}"
-        engine_path = _write_json(
-            config_dir / f"{name}-engine.json",
-            build_engine_config(
+        specs.append(
+            build_worker_spec(
                 config,
                 role,
-                kv_events_port=kv_events_port,
-                data_parallel_rpc_port=ports.data_parallel_rpc,
-            ),
-        )
-        specs.append(
-            DynamoWorkerSpec(
-                name=name,
-                role=role,
+                worker_index=worker_index,
+                role_index=role_index,
                 gpu_ids=worker_gpus,
-                system_port=ports.system,
-                process=build_worker_process(
-                    config,
-                    role,
-                    engine_path,
-                    nixl_host="127.0.0.1",
-                    nixl_port=ports.nixl,
-                    namespace=resolved_namespace,
-                ),
+                output_dir=config_dir,
+                namespace=resolved_namespace,
+                nixl_host="127.0.0.1",
             )
         )
     return specs
+
+
+def build_worker_spec(
+    config: InferenceConfig,
+    role: Role,
+    *,
+    worker_index: int,
+    role_index: int,
+    gpu_ids: tuple[str, ...],
+    output_dir: Path,
+    namespace: str,
+    nixl_host: str,
+) -> DynamoWorkerSpec:
+    """Build one worker process for either the local or distributed launcher."""
+    ports = _allocate_local_worker_ports(worker_index)
+    kv_events_port = ports.kv_events if role in ("prefill", "agg") else None
+    name = f"{role}-{role_index}"
+    engine_path = _write_json(
+        output_dir / f"{name}-{worker_index}-engine.json",
+        build_engine_config(
+            config,
+            role,
+            kv_events_port=kv_events_port,
+            data_parallel_rpc_port=ports.data_parallel_rpc,
+        ),
+    )
+    return DynamoWorkerSpec(
+        name=name,
+        role=role,
+        gpu_ids=gpu_ids,
+        system_port=ports.system,
+        process=build_worker_process(
+            config,
+            role,
+            engine_path,
+            nixl_host=nixl_host,
+            nixl_port=ports.nixl,
+            namespace=namespace,
+        ),
+    )
 
 
 def build_dry_run_worker_specs(
@@ -485,8 +514,70 @@ def _terminate(process: subprocess.Popen) -> None:
         process.wait()
 
 
+def _exec_process(process: DynamoProcessSpec, environment: dict[str, str]) -> None:
+    command = process.command()
+    os.execvpe(command[0], command, environment)
+
+
+def run_dynamo_frontend(config: InferenceConfig) -> None:
+    """Replace the current process with the allocation-wide Dynamo frontend."""
+    process = build_frontend_process(config)
+    environment = process.environment(os.environ.copy())
+    environment["CUDA_VISIBLE_DEVICES"] = ""
+    environment.pop("DYN_SYSTEM_PORT", None)
+    _exec_process(process, environment)
+
+
+def run_dynamo_worker(config: InferenceConfig, role: Role, worker_index: int, nixl_host: str) -> None:
+    """Replace the current process with one node-local distributed worker."""
+    roles = config.dynamo_worker_roles
+    if worker_index >= len(roles) or roles[worker_index] != role:
+        expected_role = roles[worker_index] if worker_index < len(roles) else None
+        raise ValueError(f"Dynamo worker {worker_index} must use role {expected_role!r}")
+    gpu_ids = tuple(_visible_gpu_ids())
+    if len(gpu_ids) != config.dynamo_gpus_per_worker:
+        raise ValueError(f"Dynamo worker requires {config.dynamo_gpus_per_worker} GPUs, but {len(gpu_ids)} are visible")
+    namespace = config.env_vars.get("DYN_NAMESPACE") or os.environ.get("DYN_NAMESPACE")
+    if namespace is None:
+        raise ValueError("Distributed Dynamo workers require DYN_NAMESPACE")
+    role_index = roles[:worker_index].count(role)
+    spec = build_worker_spec(
+        config,
+        role,
+        worker_index=worker_index,
+        role_index=role_index,
+        gpu_ids=gpu_ids,
+        output_dir=get_config_dir(config.output_dir) / ENGINE_CONFIG_DIR,
+        namespace=namespace,
+        nixl_host=nixl_host,
+    )
+    _exec_process(spec.process, build_worker_environment(spec, os.environ.copy()))
+
+
+def run_dynamo(config: InferenceConfig) -> None:
+    """Enter the local supervisor or one process selected by the RL Slurm template."""
+    process = os.environ.get(DISTRIBUTED_PROCESS_ENV)
+    if process is None:
+        run_dynamo_local(config)
+        return
+    if process == "frontend":
+        run_dynamo_frontend(config)
+        return
+    if process != "worker":
+        raise ValueError(f"Unknown {DISTRIBUTED_PROCESS_ENV} value: {process!r}")
+
+    role = os.environ.get(DISTRIBUTED_ROLE_ENV)
+    if role not in ("agg", "prefill", "decode"):
+        raise ValueError(f"{DISTRIBUTED_ROLE_ENV} must be agg, prefill, or decode")
+    worker_index = int(os.environ[DISTRIBUTED_WORKER_INDEX_ENV])
+    nixl_host = os.environ[DISTRIBUTED_NIXL_HOST_ENV]
+    run_dynamo_worker(config, cast(Role, role), worker_index, nixl_host)
+
+
 def run_dynamo_local(config: InferenceConfig) -> None:
     """Run a Dynamo frontend and all configured workers until one exits."""
+    if config.deployment.type == "multi_node":
+        raise ValueError("Dynamo multi-node inference is launched by the parent RL Slurm template")
     environment = os.environ.copy()
     environment.setdefault("DYN_DISCOVERY_BACKEND", "file")
     environment.setdefault("DYN_EVENT_PLANE", "zmq")

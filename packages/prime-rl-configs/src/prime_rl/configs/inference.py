@@ -450,12 +450,14 @@ class InferenceConfig(BaseConfig):
             return ("prefill",) * self.deployment.num_prefill_replicas + (
                 "decode",
             ) * self.deployment.num_decode_replicas
+        if self.deployment.type == "multi_node":
+            return ("agg",) * self.deployment.num_nodes
         return ("agg",)
 
     @property
     def dynamo_gpus_per_worker(self) -> int:
         """GPU allocation owned by one independently administered Dynamo worker."""
-        if self.deployment.type == "disaggregated":
+        if self.deployment.type in ("multi_node", "disaggregated"):
             return self.deployment.gpus_per_node
         return self.parallel.tp * self.parallel.dp
 
@@ -468,7 +470,7 @@ class InferenceConfig(BaseConfig):
 
     @model_validator(mode="after")
     def validate_multi_node_requires_slurm(self):
-        if self.deployment.type == "multi_node" and self.slurm is None:
+        if self.deployment.type == "multi_node" and self.slurm is None and self.backend.type != "dynamo":
             raise ValueError("Must use SLURM for multi-node deployment.")
         if self.deployment.type == "disaggregated" and self.slurm is None and self.backend.type != "dynamo":
             raise ValueError("Must use SLURM for multi-node / disaggregated deployment.")
@@ -505,8 +507,6 @@ class InferenceConfig(BaseConfig):
             raise ValueError(
                 "Dynamo is launched locally or through a DynamoGraphDeployment, not Prime's SLURM template."
             )
-        if self.deployment.type == "multi_node":
-            raise ValueError("Dynamo multi-node inference must use a DynamoGraphDeployment.")
         if self.enable_lora:
             raise ValueError("The Dynamo backend does not support LoRA weight updates.")
         router = getattr(self.deployment, "router", None)

@@ -216,9 +216,28 @@ uv run rl @ examples/reverse_text/rl.toml \
   @ examples/reverse_text/slurm_rl.toml
 ```
 
-Standalone Dynamo inference with `[slurm]` and multi-node Dynamo RL are not
-supported. Those deployment shapes require a DynamoGraphDeployment or an
-external launcher.
+Multi-node RL uses one Dynamo frontend for the allocation and starts one
+independently administered worker on each inference node. The project and
+output directory must be on the shared filesystem so every process can use
+the same file-discovery namespace. Compose either example with the same Slurm
+overlay:
+
+```bash
+# One inference node and one trainer node.
+uv run rl @ examples/reverse_text/rl.toml \
+  @ examples/reverse_text/dynamo_multinode_aggregated_rl.toml \
+  @ examples/reverse_text/slurm_rl.toml
+
+# One prefill, one decode, and one trainer node.
+uv run rl @ examples/reverse_text/rl.toml \
+  @ examples/reverse_text/dynamo_multinode_disaggregated_rl.toml \
+  @ examples/reverse_text/slurm_rl.toml
+```
+
+The multi-node launcher currently supports one logical Dynamo pool, with one
+node per P/D worker. Standalone Dynamo inference with `[slurm]` remains
+unsupported; use a DynamoGraphDeployment or an external launcher for that
+deployment shape.
 
 ### `[deployment]` Block
 
