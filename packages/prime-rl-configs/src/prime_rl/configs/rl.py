@@ -281,6 +281,20 @@ class RLConfig(BaseConfig):
                     "Must use fake data (trainer.data.fake or bench = true) when num_infer_nodes = 0, "
                     "since no orchestrator or inference server will be running."
                 )
+            if self.inference is not None and self.inference.backend.type == "dynamo":
+                if not self.slurm.shared_fs:
+                    raise ValueError("Multi-node Dynamo RL requires slurm.shared_fs = true for discovery.")
+                if self.deployment.num_infer_replicas != 1:
+                    raise ValueError("Multi-node Dynamo RL supports one logical inference pool.")
+                infer_deploy = self.inference.deployment
+                if infer_deploy.type == "single_node" and num_infer_nodes != 1:
+                    raise ValueError(
+                        "A single-node Dynamo inference deployment requires deployment.num_infer_nodes = 1."
+                    )
+                if infer_deploy.type == "disaggregated" and (
+                    infer_deploy.prefill_nodes_per_replica != 1 or infer_deploy.decode_nodes_per_replica != 1
+                ):
+                    raise ValueError("Multi-node Dynamo P/D requires one node per prefill or decode worker.")
         return self
 
     @model_validator(mode="after")

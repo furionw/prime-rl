@@ -391,6 +391,7 @@ def write_slurm_script(config: RLConfig, config_dir: Path, script_path: Path) ->
         if config.inference
         else {}
     )
+    is_dynamo = config.inference is not None and config.inference.backend.type == "dynamo"
 
     if config.deployment.type == "single_node":
         script = template.render(
@@ -405,6 +406,8 @@ def write_slurm_script(config: RLConfig, config_dir: Path, script_path: Path) ->
         script = template.render(
             **config.slurm.template_vars,
             is_disaggregated=True,
+            is_dynamo=is_dynamo,
+            frontend_port=config.inference.server.port,
             config_dir=config_dir,
             output_dir=config.output_dir,
             orchestrator_output_dir=config.orchestrator.output_dir,
@@ -442,6 +445,8 @@ def write_slurm_script(config: RLConfig, config_dir: Path, script_path: Path) ->
         script = template.render(
             **config.slurm.template_vars,
             is_disaggregated=False,
+            is_dynamo=is_dynamo,
+            frontend_port=config.inference.server.port if config.inference else 8000,
             config_dir=config_dir,  # TODO: should prob have each subconfig path separately
             output_dir=config.output_dir,
             orchestrator_output_dir=config.orchestrator.output_dir,

@@ -32,7 +32,11 @@ export NODES_PER_INFER_REPLICA={{ nodes_per_infer_replica }}
 export NUM_INFER_REPLICAS={{ num_infer_replicas }}
 export GPUS_PER_NODE={{ gpus_per_node }}
 {% if num_infer_nodes > 0 -%}
+{% if is_dynamo -%}
+export DYNAMO_FRONTEND_PORT={{ frontend_port }}
+{%- else %}
 export ROUTER_PORT={{ router.port }}
+{%- endif %}
 export INFERENCE_TP={{ inference_tp }}
 export INFERENCE_DP_LOCAL=$((GPUS_PER_NODE / INFERENCE_TP))
 export INFERENCE_DATA_PARALLEL_RPC_PORT={{ inference_data_parallel_rpc_port }}
@@ -63,6 +67,20 @@ mkdir -p $OUTPUT_DIR/logs/trainer $OUTPUT_DIR/logs/inference
 rm -f $OUTPUT_DIR/logs/inference/*.log
 ln -sfn trainer/node_0.log $OUTPUT_DIR/logs/trainer.log
 ln -sfn inference/node_0.log $OUTPUT_DIR/logs/inference.log
+{% if is_dynamo %}
+# The shared file backend lets one frontend and workers on every inference
+# node join the same Dynamo namespace without an external discovery service.
+export DYN_DISCOVERY_BACKEND=file
+export DYN_EVENT_PLANE=zmq
+export DYN_FILE_KV=$OUTPUT_DIR/dynamo/discovery-$SLURM_JOB_ID
+export DYN_FILE_KV_TTL_SECS=1800
+export DYN_NAMESPACE=prime-rl-$SLURM_JOB_ID
+export RL_TRAIN_DONE_FILE=$OUTPUT_DIR/dynamo/train-done-$SLURM_JOB_ID
+export RL_ORCH_DONE_FILE=$OUTPUT_DIR/dynamo/orchestrator-done-$SLURM_JOB_ID
+export RL_DONE_FILE=$OUTPUT_DIR/dynamo/rl-done-$SLURM_JOB_ID
+mkdir -p $OUTPUT_DIR/dynamo
+rm -f $DYN_FILE_KV $RL_TRAIN_DONE_FILE $RL_ORCH_DONE_FILE $RL_DONE_FILE
+{% endif %}
 
 export WANDB_SHARED_MODE=1
 export WANDB_SHARED_RUN_ID=${WANDB_SHARED_RUN_ID:-$(python3 -c "import uuid; print(uuid.uuid4().hex)")}
@@ -79,7 +97,11 @@ INFER_HOSTS=( ${HOSTNAMES[@]:0:$NUM_INFER_NODES} )
 INFER_URLS=""
 ADMIN_URLS=""
 ALL_ROUTER_ARGS=""
-{% if is_disaggregated -%}
+{% if is_dynamo -%}
+DYNAMO_FRONTEND_HOST="${INFER_HOSTS[0]}"
+INFER_URLS="http://${DYNAMO_FRONTEND_HOST}:${DYNAMO_FRONTEND_PORT}/v1"
+ADMIN_URLS="$INFER_URLS"
+{%- elif is_disaggregated -%}
 for ((r=0; r<NUM_INFER_REPLICAS; r++)); do
     replica_base=$((r * NODES_PER_INFER_REPLICA))
     router_host="${INFER_HOSTS[$replica_base]}"
@@ -177,6 +199,8 @@ srun bash -s <<'CLEANUP_SH'
     pkill -9 -f "[e]pp.*pool-name" 2>/dev/null
     pkill -9 -f "[e]nvoy.*envoy.yaml" 2>/dev/null
     pkill -9 -f "[p]d-sidecar" 2>/dev/null
+    pkill -9 -f "[d]ynamo.frontend" 2>/dev/null
+    pkill -9 -f "[d]ynamo.vllm" 2>/dev/null
     pkill -9 -f "[v]llm" 2>/dev/null
     pkill -9 -f "[p]rime_rl" 2>/dev/null
     # Also match prctl-set process names (kernel comm) like "vllm::router"
@@ -241,6 +265,43 @@ if [ "$SLURM_PROCID" -lt "$NUM_INFER_NODES" ]; then
         | tee $OUTPUT_DIR/logs/inference/node_${INFER_NODE_RANK}.log
 
     CONFIG_PATH="$CONFIG_DIR/inference.toml"
+{% if is_dynamo -%}
+    # One allocation-wide frontend discovers one independently administered
+    # worker per inference node. The worker index fixes discovery/admin order.
+    if [ "$INFER_NODE_RANK" -eq 0 ]; then
+        PRIME_RL_DYNAMO_PROCESS=frontend CUDA_VISIBLE_DEVICES="" \
+            uv run inference @ "$CONFIG_PATH" --output-dir "$OUTPUT_DIR" \
+            >> "$OUTPUT_DIR/logs/inference/frontend.log" 2>&1 &
+    fi
+
+{% if is_disaggregated -%}
+    rdma_ports() {
+        for port in /sys/class/infiniband/*/ports/*; do
+            [ "$(cat "$port/link_layer" 2>/dev/null)" = "$1" ] || continue
+            grep -q ACTIVE "$port/state" 2>/dev/null || continue
+            dev=${port%/ports/*}
+            echo "$(basename "$dev"):$(basename "$port")"
+        done | paste -sd,
+    }
+    UCX_NET_DEVICES=$(rdma_ports InfiniBand)
+    [ -n "$UCX_NET_DEVICES" ] || UCX_NET_DEVICES=$(rdma_ports Ethernet)
+    export UCX_NET_DEVICES=${UCX_NET_DEVICES:-all}
+    if [ "$INFER_NODE_RANK" -lt "$NUM_PREFILL_NODES" ]; then
+        DYNAMO_ROLE=prefill
+    else
+        DYNAMO_ROLE=decode
+    fi
+{%- else %}
+    DYNAMO_ROLE=agg
+{%- endif %}
+    export CUDA_VISIBLE_DEVICES=$(seq -s, 0 $((GPUS_PER_NODE - 1)))
+    PRIME_RL_DYNAMO_PROCESS=worker \
+    PRIME_RL_DYNAMO_ROLE=$DYNAMO_ROLE \
+    PRIME_RL_DYNAMO_WORKER_INDEX=$INFER_NODE_RANK \
+    PRIME_RL_DYNAMO_NIXL_HOST=$LOCAL_IP \
+        uv run inference @ "$CONFIG_PATH" --output-dir "$OUTPUT_DIR" \
+        >> "$OUTPUT_DIR/logs/inference/node_${INFER_NODE_RANK}.log" 2>&1 &
+{%- else %}
 {% include '_launch_rank.sh.j2' %}
 {% include '_launch_router.sh.j2' %}
 
@@ -377,6 +438,7 @@ if [ "$SLURM_PROCID" -lt "$NUM_INFER_NODES" ]; then
         fi
     done
 {%- endif %}
+{%- endif %}
 
 else
     TRAIN_NODE_RANK=$((SLURM_PROCID - NUM_INFER_NODES))
@@ -391,7 +453,9 @@ else
 
     echo $HOSTNAMES_STR | tee $OUTPUT_DIR/logs/trainer/node_${TRAIN_NODE_RANK}.log
 
-    WANDB_SHARED_LABEL=trainer uv run torchrun \
+{% if is_dynamo %}    (
+    set -o pipefail
+{% endif %}    WANDB_SHARED_LABEL=trainer uv run torchrun \
         --role=trainer \
         --nnodes=$NUM_TRAIN_NODES \
         --nproc-per-node=$GPUS_PER_NODE \
@@ -404,7 +468,15 @@ else
         --local-ranks-filter={{ ranks_filter }} \
         -m prime_rl.trainer.rl.train \
         @ $CONFIG_DIR/trainer.toml \
-        2>&1 | sed -u 's/^\[[a-zA-Z]*[0-9]*\]://' | tee -a $OUTPUT_DIR/logs/trainer/node_${TRAIN_NODE_RANK}.log &
+        2>&1 | sed -u 's/^\[[a-zA-Z]*[0-9]*\]://' | tee -a $OUTPUT_DIR/logs/trainer/node_${TRAIN_NODE_RANK}.log
+{% if is_dynamo %}    TRAINER_EXIT=$?
+    if [ "$TRAINER_EXIT" -eq 0 ] && [ "$TRAIN_NODE_RANK" -eq 0 ]; then
+        touch "$RL_TRAIN_DONE_FILE"
+    fi
+    exit $TRAINER_EXIT
+    ) &
+{% else %}    &
+{% endif %}
 {% if num_infer_nodes > 0 %}    fi{% endif %}
 {% if num_infer_nodes > 0 %}
 # Launch the orchestrator on one node. Default is trainer rank 0 (SLURM_PROCID ==
@@ -423,17 +495,49 @@ if [ "$SLURM_PROCID" -eq "$ORCH_PROCID" ]; then
 {%- endfor %}
 {%- endif %}
     {% if use_nccl_broadcast %}ORCHESTRATOR_ARGS="$ORCHESTRATOR_ARGS --weight_broadcast.host $MASTER_ADDR"
+    {% endif %}{% if is_dynamo %}(
+        set -o pipefail
     {% endif %}WANDB_SHARED_LABEL=orchestrator uv run orchestrator $ORCHESTRATOR_ARGS \
-        2>&1 | tee $OUTPUT_DIR/logs/orchestrator.log &
+        2>&1 | tee $OUTPUT_DIR/logs/orchestrator.log
+{% if is_dynamo %}        ORCHESTRATOR_EXIT=$?
+        if [ "$ORCHESTRATOR_EXIT" -eq 0 ]; then
+            touch "$RL_ORCH_DONE_FILE"
+        fi
+        exit $ORCHESTRATOR_EXIT
+    ) &
+{% else %}    &
+{% endif %}
 fi
 {% endif %}
 
+{% if is_dynamo %}
+# Dynamo frontends and workers are long-lived services, so a clean trainer
+# exit alone cannot finish the allocation. Every node observes the two shared
+# completion markers; the first non-zero local child still tears down the
+# allocation through --kill-on-bad-exit=1.
+(
+    while [ ! -f "$RL_TRAIN_DONE_FILE" ] || [ ! -f "$RL_ORCH_DONE_FILE" ]; do
+        sleep 1
+    done
+    touch "$RL_DONE_FILE"
+) &
+
+EXIT_CODE=0
+while true; do
+    wait -n
+    EXIT_CODE=$?
+    if [ "$EXIT_CODE" -ne 0 ] || [ -f "$RL_DONE_FILE" ]; then
+        break
+    fi
+done
+{% else %}
 # Wait for the first background job to exit and propagate its exit code. This
 # turns background process crashes (router, orchestrator) into task failures
 # that --kill-on-bad-exit=1 can broadcast to the other nodes so the whole job
 # tears down instead of leaving zombies holding the allocation.
 wait -n
 EXIT_CODE=$?
+{% endif %}
 REMAINING_PIDS=$(jobs -p)
 {%- if cleanup_grace_period %}
 # Cross-node teardown is driven by `srun --kill-on-bad-exit=1`, which reaps peer
